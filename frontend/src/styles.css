@@ -1,0 +1,152 @@
+/* ============================================================================
+   SFS Design System — tokens + universal components (ported from the map tool).
+   Plain CSS custom properties: one :root block + one [data-theme="dark"] block.
+   ========================================================================== */
+
+:root {
+  /* top-bar "chrome" — ALWAYS dark, in both themes (fixed brand band) */
+  --chrome-bg:#0F0F11; --chrome-border:rgba(255,255,255,.08); --chrome-text:#F4F4F4; --chrome-dim:#9A9A9A;
+
+  /* surfaces (light) — warm off-white bg, white cards */
+  --bg:#F6F4F0; --surface:#FFFFFF; --border:#E6E3DE;
+
+  /* text (light) — primary / secondary / tertiary */
+  --text:#1A1A1A; --text-2:#5C5C5C; --text-3:#8A8A8A;
+
+  /* one action color (amber) + semantic */
+  --accent:#DDA032; --accent-hover:#C98E22; --success:#2FA968; --danger:#D1452B;
+
+  /* categorical palette (repurpose for ML classes / confidence bands / splits) */
+  --t1:#16B5C2; --t2:#2F9E6B; --t3:#D9A02E; --t4:#E2663C; --t5:#8B6FD0; --gap:#D85FA0;
+
+  /* radii */
+  --r-pill:999px; --r-card:12px; --r-ctl:8px;
+
+  /* elevation */
+  --shadow-1:0 1px 2px rgba(0,0,0,.06); --shadow-2:0 8px 24px rgba(0,0,0,.10);
+
+  /* interaction tints */
+  --hover:rgba(0,0,0,.05); --code-bg:rgba(0,0,0,.05);
+
+  --font-display:"Space Grotesk",system-ui,sans-serif; --font-body:"Inter",system-ui,sans-serif;
+}
+
+/* dark theme: data-theme="dark" on <html>. Only surfaces/text/shadows/tints flip;
+   chrome, accent, and the categorical palette are SHARED across themes. */
+[data-theme="dark"] {
+  --bg:#161618; --surface:#202024; --border:#33333A;
+  --text:#F4F4F5; --text-2:#CBCBD2; --text-3:#9C9CA6;
+  --shadow-1:0 1px 2px rgba(0,0,0,.4); --shadow-2:0 10px 28px rgba(0,0,0,.55);
+  --hover:rgba(255,255,255,.06); --code-bg:rgba(255,255,255,.08);
+}
+
+/* ---- base reset + typography ------------------------------------------- */
+* { box-sizing: border-box; }
+html, body, #root { margin: 0; height: 100%; }
+body { font-family: var(--font-body); background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; }
+
+.page-title { font-family: var(--font-display); font-size: 22px; font-weight: 600; margin: 0; }
+.section-label { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--text-3); }
+.hint { font-size: 12px; color: var(--text-3); line-height: 1.45; }
+.muted { color: var(--text-3); }
+.mono { font-family: ui-monospace, monospace; font-size: 12px; }
+code { font-family: ui-monospace, monospace; font-size: 12px; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+
+/* ---- buttons ----------------------------------------------------------- */
+button { font-family: var(--font-body); cursor: pointer; color: inherit; }
+.primary { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 40px; padding: 0 16px; background: var(--accent); border: 1px solid var(--accent); color: #fff; border-radius: var(--r-ctl); font-size: 13px; font-weight: 600; letter-spacing: .03em; }
+.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+.primary:disabled { opacity: .45; cursor: default; }
+.primary.wide { width: 100%; }
+.secondary { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 40px; padding: 0 16px; background: transparent; border: 1px solid var(--border); color: var(--text-2); border-radius: var(--r-ctl); font-size: 13px; text-transform: uppercase; letter-spacing: .03em; }
+.secondary:hover { background: var(--hover); }
+.link { background: none; border: none; color: var(--accent); font-size: 13px; padding: 0; cursor: pointer; }
+
+/* ---- inputs / selects (full-width, 40px, accent focus ring) ------------ */
+input[type=text], input[type=number], select {
+  width: 100%; height: 40px; padding: 0 12px; background: var(--surface); border: 1px solid var(--border);
+  color: var(--text); border-radius: var(--r-ctl); font-size: 14px; font-family: var(--font-body);
+}
+input:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(221,160,50,.18); }
+input[type=number] { font-feature-settings: "tnum" 1; }
+
+/* ---- card -------------------------------------------------------------- */
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); padding: 20px; display: flex; flex-direction: column; gap: 8px; }
+
+/* ---- status line (inline ok/err/info feedback) ------------------------- */
+.statusline { font-size: 12px; color: var(--text-2); font-feature-settings: "tnum" 1; }
+.statusline code { background: none; padding: 0; }
+.statusline.ok code { color: var(--success); }
+.statusline.err code { color: var(--danger); }
+.statusline.info code { color: var(--text-3); }
+
+/* ---- status badge (pill; job/run states) ------------------------------- */
+.badge-state { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 999px; text-transform: uppercase; letter-spacing: .03em; }
+.badge-state.s-success { background: rgba(47,169,104,.16); color: var(--success); }
+.badge-state.s-running, .badge-state.s-queued { background: rgba(221,160,50,.16); color: var(--accent-hover); }
+.badge-state.s-failed { background: rgba(209,69,43,.16); color: var(--danger); }
+
+/* ---- meter / progress bar ---------------------------------------------- */
+.meter { height: 8px; background: var(--border); border-radius: 999px; overflow: hidden; }
+.meter-fill { height: 100%; background: var(--accent); border-radius: 999px; }
+
+/* ---- segmented control (tab-like toggle) ------------------------------- */
+.segmented { display: flex; border: 1px solid var(--border); border-radius: var(--r-ctl); overflow: hidden; background: var(--surface); }
+.segmented button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: none; background: transparent; min-height: 36px; padding: 6px 4px; font-size: 12px; color: var(--text-3); border-right: 1px solid var(--border); }
+.segmented button:last-child { border-right: none; }
+.segmented button:hover:not(.active) { color: var(--text); background: var(--hover); }
+.segmented button.active { background: var(--accent); color: #fff; font-weight: 600; }
+
+/* ---- selectable list button (rows you click to select) ----------------- */
+.scene-btn { width: 100%; text-align: left; display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-ctl); cursor: pointer; }
+.scene-btn:hover { border-color: var(--accent); }
+.scene-btn.on { border-color: var(--accent); background: rgba(221,160,50,.1); }
+
+/* ============================================================================
+   Layout — app-specific shell for the ML console (dark chrome topbar + views)
+   ========================================================================== */
+.app { min-height: 100%; display: flex; flex-direction: column; }
+
+.topbar { flex: none; height: 52px; background: var(--chrome-bg); border-bottom: 1px solid var(--chrome-border); color: var(--chrome-text); display: flex; align-items: center; justify-content: space-between; padding: 0 16px; }
+.wordmark { font-family: var(--font-display); font-weight: 600; font-size: 16px; color: var(--accent); display: inline-flex; align-items: center; gap: 8px; letter-spacing: .02em; }
+.wm-dim { color: var(--chrome-dim); font-weight: 500; }
+.topbar-right { display: inline-flex; align-items: center; gap: 8px; }
+.icon-btn { background: none; border: none; color: var(--chrome-text); display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: var(--r-ctl); }
+.icon-btn:hover { color: var(--accent); background: rgba(255,255,255,.06); }
+
+.content { flex: 1; overflow: auto; }
+.view { max-width: 960px; margin: 0 auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+
+.stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.stat { gap: 4px; }
+.stat b { font-family: var(--font-display); font-size: 24px; font-weight: 600; font-feature-settings: "tnum" 1; }
+
+.quota-num { font-family: var(--font-display); font-size: 24px; font-weight: 600; font-feature-settings: "tnum" 1; }
+.quota-sub { color: var(--text-3); font-size: 16px; }
+
+.row-between { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.list { display: flex; flex-direction: column; gap: 8px; }
+.field-label { font-size: 12px; color: var(--text-2); font-weight: 500; margin-top: 4px; }
+.run { gap: 10px; }
+
+/* ---- markdown block (rendered docs / reports) -------------------------- */
+.markdown { color: var(--text); font-size: 14px; line-height: 1.6; }
+.markdown > *:first-child { margin-top: 0; }
+.markdown h1 { font-family: var(--font-display); font-size: 22px; font-weight: 600; margin: 24px 0 12px; }
+.markdown h2 { font-family: var(--font-display); font-size: 18px; font-weight: 600; margin: 28px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.markdown h3 { font-family: var(--font-display); font-size: 15px; font-weight: 600; margin: 20px 0 8px; }
+.markdown p { margin: 0 0 12px; }
+.markdown ul, .markdown ol { margin: 0 0 12px; padding-left: 22px; }
+.markdown li { margin: 3px 0; }
+.markdown a { color: var(--accent); text-decoration: none; }
+.markdown a:hover { text-decoration: underline; }
+.markdown code { font-family: ui-monospace, monospace; font-size: 12px; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+.markdown pre { background: var(--chrome-bg); color: var(--chrome-text); border-radius: var(--r-ctl); padding: 14px 16px; overflow: auto; margin: 0 0 14px; }
+.markdown pre code { background: none; padding: 0; color: inherit; font-size: 12.5px; }
+.markdown blockquote { margin: 0 0 14px; padding: 4px 0 4px 14px; border-left: 3px solid var(--border); color: var(--text-2); }
+.markdown table { border-collapse: collapse; width: 100%; margin: 0 0 14px; font-size: 13px; }
+.markdown th, .markdown td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+.markdown th { background: var(--bg); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-2); font-weight: 600; }
+.markdown td { font-feature-settings: "tnum" 1; }
+.markdown hr { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+.markdown strong { font-weight: 600; }

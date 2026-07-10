@@ -1,0 +1,31 @@
+# --- Data: Planet EDU-licensed imagery + derived products (keep out of git) ---
+imagery/
+outputs/
+cache/
+data/geotiffs/
+data/coco/
+
+# Transient SQLite sidecars from an open GeoPackage (QGIS)
+*.gpkg-shm
+*.gpkg-wal
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+
+# --- Node / frontend build ---
+node_modules/
+dist/
+
+# --- Model weights / checkpoints ---
+*.pt
+*.pth
+*.onnx
+weights/
+
+# --- OS ---
+.DS_Store
