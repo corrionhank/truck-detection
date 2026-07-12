@@ -27,5 +27,15 @@ dist/
 *.onnx
 weights/
 
+# --- Exploratory C++ inspection tool + concept/learning material ---
+#     (kept locally alongside the project, intentionally not committed)
+tools/geoinspect/
+concept/
+
+# --- C/C++ build artifacts ---
+build/
+*.o
+*.obj
+
 # --- OS ---
 .DS_Store

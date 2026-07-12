@@ -79,6 +79,8 @@ input[type=number] { font-feature-settings: "tnum" 1; }
 .statusline.ok code { color: var(--success); }
 .statusline.err code { color: var(--danger); }
 .statusline.info code { color: var(--text-3); }
+.spin { animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ---- status badge (pill; job/run states) ------------------------------- */
 .badge-state { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 999px; text-transform: uppercase; letter-spacing: .03em; }

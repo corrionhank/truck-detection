@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Moon, Sun, Truck, Play, Database, Activity, ScanLine, FileText } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Moon, Sun, Truck, Play, Database, Activity, ScanLine, FileText, Loader2 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useTheme } from './useTheme'
@@ -8,26 +8,44 @@ import annotationsSpec from './docs/annotations-spec.md?raw'
 type Tab = 'dataset' | 'training' | 'inference' | 'spec'
 type RunState = 's-success' | 's-running' | 's-queued' | 's-failed'
 
-/* Mock data — no backend yet. Reflects the truck-detection project state. */
-const SCENES = [
-  { name: 'Bellingham_01_20260425', vehicles: 7 },
-  { name: 'Centralia_02_20260511', vehicles: 6 },
-  { name: 'Stanwood_08_20260504', vehicles: 3 },
-  { name: 'Seattle_01_20260502', vehicles: 0 },
-  { name: 'Ellensburg_01_20260504', vehicles: 0 },
-]
-const VEHICLES = 50
-const TARGET = 150
+type Scene = { name: string; vehicles: number }
+type Dataset = {
+  vehicles: number
+  echoes: number
+  scenes_labelled: number
+  per_scene: Record<string, { vehicles: number; echoes: number }>
+}
+type Detection = { score: number; red_utm: [number, number]; keypoints_px: number[][] }
+type DetectResult = {
+  scene: string
+  count: number
+  stride: number
+  thresh: number
+  detections: Detection[]
+  gt: { labelled: number; recall: number; near_label: number; elsewhere: number } | null
+  montage_url: string
+  preview_url: string
+}
 
+const VEHICLE_TARGET = 150 // vehicles needed before the model can generalise (Adamiak used ~1000+)
+
+/* Training runs are illustrative only — real training runs from the CLI (see MODEL.md). */
 const RUNS: { id: string; name: string; state: RunState; label: string; pct: number; meta: string }[] = [
-  { id: 'r3', name: 'kprcnn-r50 · run 003', state: 's-running', label: 'running', pct: 62, meta: 'epoch 12/20 · loss 4.81' },
-  { id: 'r2', name: 'kprcnn-r50 · run 002', state: 's-success', label: 'done', pct: 100, meta: 'final loss 3.92 · 2.4 h' },
-  { id: 'r1', name: 'kprcnn-r50 · run 001', state: 's-failed', label: 'failed', pct: 100, meta: 'OOM at epoch 3' },
+  { id: 'r3', name: 'kprcnn-r50-jitter · run 002', state: 's-success', label: 'done', pct: 100, meta: 'final loss 1.32 · 30 epochs (CPU)' },
+  { id: 'r1', name: 'kprcnn-r50 · run 001', state: 's-success', label: 'done', pct: 100, meta: 'final loss 1.38 · overfit demo' },
 ]
 
 export default function App() {
   const { theme, toggle } = useTheme()
   const [tab, setTab] = useState<Tab>('dataset')
+  const [scenes, setScenes] = useState<Scene[]>([])
+
+  useEffect(() => {
+    fetch('/api/scenes')
+      .then((r) => r.json())
+      .then((d) => setScenes(d.scenes))
+      .catch(() => setScenes([]))
+  }, [])
 
   return (
     <div className="app">
@@ -62,9 +80,9 @@ export default function App() {
             </button>
           </div>
 
-          {tab === 'dataset' && <DatasetView />}
+          {tab === 'dataset' && <DatasetView totalScenes={scenes.length} />}
           {tab === 'training' && <TrainingView />}
-          {tab === 'inference' && <InferenceView />}
+          {tab === 'inference' && <InferenceView scenes={scenes} />}
           {tab === 'spec' && <SpecView />}
         </div>
       </main>
@@ -72,7 +90,7 @@ export default function App() {
   )
 }
 
-function Stat({ label, value }: { label: string; value: number }) {
+function Stat({ label, value }: { label: string; value: number | string }) {
   return (
     <div className="card stat">
       <div className="section-label">{label}</div>
@@ -81,28 +99,40 @@ function Stat({ label, value }: { label: string; value: number }) {
   )
 }
 
-function DatasetView() {
-  const [selected, setSelected] = useState<string | null>(null)
-  const labeledScenes = SCENES.filter((s) => s.vehicles > 0).length
-  const pct = Math.min(100, Math.round((VEHICLES / TARGET) * 100))
+function DatasetView({ totalScenes }: { totalScenes: number }) {
+  const [data, setData] = useState<Dataset | null>(null)
+  const [err, setErr] = useState(false)
+
+  useEffect(() => {
+    fetch('/api/dataset')
+      .then((r) => r.json())
+      .then(setData)
+      .catch(() => setErr(true))
+  }, [])
+
+  if (err) return <div className="card">Backend not reachable — start it with <code>python3 backend/server.py</code></div>
+  if (!data) return <div className="card">Loading dataset…</div>
+
+  const pct = Math.min(100, Math.round((data.vehicles / VEHICLE_TARGET) * 100))
+  const rows = Object.entries(data.per_scene)
 
   return (
     <>
       <div className="stat-row">
-        <Stat label="Scenes" value={SCENES.length} />
-        <Stat label="Scenes labeled" value={labeledScenes} />
-        <Stat label="Vehicles labeled" value={VEHICLES} />
-        <Stat label="Target" value={TARGET} />
+        <Stat label="Scenes" value={totalScenes || '—'} />
+        <Stat label="Scenes labeled" value={data.scenes_labelled} />
+        <Stat label="Vehicles labeled" value={data.vehicles} />
+        <Stat label="Echoes (keypoints)" value={data.echoes} />
       </div>
 
       <div className="card">
         <div className="section-label">Labeling progress</div>
         <div className="row-between">
           <span className="quota-num">
-            {VEHICLES}
-            <span className="quota-sub"> / {TARGET}</span>
+            {data.vehicles}
+            <span className="quota-sub"> / {VEHICLE_TARGET} vehicles</span>
           </span>
-          <span className="hint">{pct}% toward first-model target</span>
+          <span className="hint">{pct}% toward first-model target · {data.echoes} echoes (3 per vehicle)</span>
         </div>
         <div className="meter">
           <div className="meter-fill" style={{ width: `${pct}%` }} />
@@ -110,17 +140,13 @@ function DatasetView() {
       </div>
 
       <div className="card">
-        <div className="section-label">Scenes</div>
+        <div className="section-label">Labeled scenes</div>
         <div className="list">
-          {SCENES.map((s) => (
-            <button
-              key={s.name}
-              className={`scene-btn${selected === s.name ? ' on' : ''}`}
-              onClick={() => setSelected(s.name)}
-            >
-              <span className="mono">{s.name}</span>
-              <span className="hint">{s.vehicles > 0 ? `${s.vehicles} vehicles labeled` : 'not labeled'}</span>
-            </button>
+          {rows.map(([name, s]) => (
+            <div key={name} className="scene-btn">
+              <span className="mono">{name}</span>
+              <span className="hint">{s.vehicles} vehicles · {s.echoes} echoes</span>
+            </div>
           ))}
         </div>
       </div>
@@ -133,10 +159,14 @@ function TrainingView() {
     <>
       <div className="row-between">
         <div className="section-label">Runs</div>
-        <button className="primary" style={{ height: 36 }}>
+        <button className="primary" style={{ height: 36 }} disabled title="Training runs from the CLI — see MODEL.md">
           <Play size={14} /> New run
         </button>
       </div>
+      <p className="hint" style={{ marginTop: 0 }}>
+        Illustrative — training runs from the terminal (<code>src/train_keypoint_rcnn_jitter.py</code>). The
+        Inference tab uses the finished weights.
+      </p>
       <div className="list">
         {RUNS.map((r) => (
           <div key={r.id} className="card run">
@@ -171,38 +201,95 @@ function SpecView() {
   )
 }
 
-function InferenceView() {
-  const [scene, setScene] = useState(SCENES[0].name)
-  const [status, setStatus] = useState<{ kind: 'ok' | 'err' | 'info'; msg: string } | null>(null)
+function InferenceView({ scenes }: { scenes: Scene[] }) {
+  const [scene, setScene] = useState('')
+  const [thresh, setThresh] = useState(0.5)
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<DetectResult | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [nonce, setNonce] = useState(0)
 
-  const run = () => {
-    setStatus({ kind: 'info', msg: 'running…' })
-    window.setTimeout(
-      () => setStatus({ kind: 'ok', msg: `detected 0 echoes in ${scene} (stub — no trained model yet)` }),
-      600,
-    )
+  useEffect(() => {
+    if (!scene && scenes.length) setScene(scenes[0].name)
+  }, [scenes, scene])
+
+  const run = async () => {
+    setBusy(true); setError(null); setResult(null)
+    try {
+      const r = await fetch('/api/detect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scene, thresh }),
+      })
+      const data = await r.json()
+      if (!r.ok) throw new Error(data.error || r.statusText)
+      setResult(data)
+      setNonce((n) => n + 1)
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e))
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (
-    <div className="card" style={{ maxWidth: 560 }}>
+    <div className="card" style={{ maxWidth: 900 }}>
       <div className="section-label">Run detection</div>
       <p className="hint" style={{ margin: 0 }}>
-        Pick a scene and run the detector. Wires the UI end to end; returns a stub until a model exists.
+        Runs the trained Keypoint R-CNN (<code>keypoint_rcnn_echo_jitter.pt</code>) across the whole scene.
+        Takes ~1&nbsp;min on CPU.
       </p>
+
       <label className="field-label">Scene</label>
-      <select value={scene} onChange={(e) => setScene(e.target.value)}>
-        {SCENES.map((s) => (
+      <select value={scene} onChange={(e) => setScene(e.target.value)} disabled={busy}>
+        {scenes.map((s) => (
           <option key={s.name} value={s.name}>
-            {s.name}
+            {s.name}{s.vehicles ? ` · ${s.vehicles} labeled` : ' · unlabeled'}
           </option>
         ))}
       </select>
-      <button className="primary wide" onClick={run} style={{ marginTop: 12 }}>
-        <Play size={14} /> Run detection
+
+      <label className="field-label">Confidence threshold: {thresh.toFixed(2)}</label>
+      <input
+        type="range" min={0.3} max={0.9} step={0.05} value={thresh}
+        onChange={(e) => setThresh(parseFloat(e.target.value))} disabled={busy}
+        style={{ width: '100%' }}
+      />
+
+      <button className="primary wide" onClick={run} style={{ marginTop: 12 }} disabled={busy || !scene}>
+        {busy ? <Loader2 size={14} className="spin" /> : <Play size={14} />}
+        {busy ? ' Running… (~1 min)' : ' Run detection'}
       </button>
-      {status && (
-        <div className={`statusline ${status.kind}`} style={{ marginTop: 10 }}>
-          <code>[{status.kind}]</code> {status.msg}
+
+      {error && (
+        <div className="statusline err" style={{ marginTop: 10 }}>
+          <code>[err]</code> {error}
+        </div>
+      )}
+
+      {result && (
+        <div style={{ marginTop: 16 }}>
+          <div className="row-between">
+            <span style={{ fontWeight: 600 }}>
+              {result.count} detections · stride {result.stride} · thresh {result.thresh}
+            </span>
+            {result.gt && (
+              <span className="hint">
+                recall {result.gt.recall}/{result.gt.labelled} labeled · {result.gt.near_label} near-label ·{' '}
+                {result.gt.elsewhere} elsewhere
+              </span>
+            )}
+          </div>
+          {result.gt && (
+            <p className="hint" style={{ marginTop: 4 }}>
+              "elsewhere" ≠ false positives: most scenes are only partly labeled, so many are real unlabeled trucks.
+            </p>
+          )}
+          <img
+            src={`${result.montage_url}?v=${nonce}`}
+            alt="detections"
+            style={{ width: '100%', borderRadius: 8, marginTop: 8, border: '1px solid var(--border, #ddd)' }}
+          />
         </div>
       )}
     </div>
