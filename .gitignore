@@ -4,6 +4,7 @@ outputs/
 cache/
 data/geotiffs/
 data/coco/
+data/annotations/
 
 # Transient SQLite sidecars from an open GeoPackage (QGIS)
 *.gpkg-shm

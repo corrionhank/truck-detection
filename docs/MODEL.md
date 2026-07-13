@@ -87,7 +87,7 @@ python3 src/detect_scene.py Stanwood_08_20260504 \
 - **Run on CPU.** MPS produces NaN losses with torchvision detection models (RoIAlign/anchor
   math); `--device cpu` is the default for this reason.
 - **`scene` whitespace bug:** one annotation row had a leading space (`" Bellingham_01…"`).
-  `export_coco.py` strips it — see [ANNOTATION_SPEC.md](ANNOTATION_SPEC.md).
+  `export_coco.py` strips it — see [DATA.md](DATA.md).
 - One vehicle had only 2 of 3 keypoints and is dropped at export (15 of 16 kept).
 
 ## What's needed to make this real
