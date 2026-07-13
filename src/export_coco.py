@@ -2,7 +2,7 @@
 """
 Export the QGIS annotations + SuperDove GeoTIFFs to a COCO-keypoints dataset.
 
-This is the join described in annotation_data_spec.md, made concrete:
+This is the join described in docs/ANNOTATION_SPEC.md, made concrete:
     annotation point (UTM metres) --[inverse affine of its scene]--> pixel col/row
     grouped by vehicle_id, ordered by sequence (1 blue, 2 red, 3 green)
     -> one COCO annotation of 3 keypoints, on a per-vehicle image chip.
