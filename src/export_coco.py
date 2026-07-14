@@ -27,9 +27,9 @@ import rasterio
 from PIL import Image
 
 REPO = Path(__file__).resolve().parent.parent
-GPKG = REPO / "Annotations-RGB.gpkg"
-GEOTIFF_DIR = REPO / "imagery" / "all_geotiffs"
-OUT_DIR = REPO / "data" / "coco"
+GPKG = REPO / "data" / "active" / "Annotations-RGB.gpkg"
+GEOTIFF_DIR = REPO / "data" / "active" / "imagery"
+OUT_DIR = REPO / "data" / "active" / "coco"
 
 # Planet PSB.SD band order -> true colour; also the capture order blue->red->green.
 RED, GREEN, BLUE = 6, 4, 2

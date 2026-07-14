@@ -111,6 +111,6 @@ def src_res(transform):
 
 
 if __name__ == "__main__":
-    scene = sys.argv[1] if len(sys.argv) > 1 else "imagery/all_geotiffs/Seattle_01_20260502.tif"
+    scene = sys.argv[1] if len(sys.argv) > 1 else "data/cold/imagery/Seattle_01_20260502.tif"
     buf = float(sys.argv[2]) if len(sys.argv) > 2 else 15.0
     build_mask(scene, buf)

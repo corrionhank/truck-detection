@@ -1,10 +1,14 @@
-# --- Data: Planet EDU-licensed imagery + derived products (keep out of git) ---
+# --- Data ---
+# Track ONLY the labels (data/active/Annotations-RGB.gpkg). All imagery
+# (Planet EDU-licensed) and generated products stay out of git.
+data/active/imagery/
+data/active/coco/
+data/cold/
 imagery/
 outputs/
 cache/
-data/geotiffs/
-data/coco/
-data/annotations/
+*.zip
+*.aux.xml
 
 # Transient SQLite sidecars from an open GeoPackage (QGIS)
 *.gpkg-shm
@@ -28,8 +32,11 @@ dist/
 *.onnx
 weights/
 
+# --- Editor / IDE ---
+.vscode/
+
 # --- Exploratory C++ inspection tool + concept/learning material ---
-#     (kept locally alongside the project, intentionally not committed)
+# (kept locally alongside the project, intentionally not committed)
 tools/geoinspect/
 concept/
 

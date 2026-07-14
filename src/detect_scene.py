@@ -27,7 +27,7 @@ from PIL import Image, ImageDraw
 from train_keypoint_rcnn import build_model, WEIGHTS, REPO
 from export_coco import RED, GREEN, BLUE, stretch_params, apply_stretch
 
-GEOTIFF_DIR = REPO / "imagery" / "all_geotiffs"
+GEOTIFF_DIR = REPO / "data" / "active" / "imagery"
 CHIP = 64
 KP_COLORS = [(80, 140, 255), (255, 70, 70), (70, 220, 90)]  # blue, red, green
 
@@ -43,7 +43,7 @@ def build_rgb(src):
 def load_gt_reds(scene, transform):
     """Pixel coords of the red (sequence 2) keypoint of each labelled vehicle."""
     import geopandas as gpd
-    gpkg = REPO / "Annotations-RGB.gpkg"
+    gpkg = REPO / "data" / "active" / "Annotations-RGB.gpkg"
     gdf = gpd.read_file(gpkg, layer="Annotations")
     gdf["scene"] = gdf["scene"].astype(str).str.strip()
     g = gdf[(gdf["scene"] == scene) & (gdf["sequence"] == 2)]

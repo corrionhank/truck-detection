@@ -76,5 +76,5 @@ def main(scene_path):
 
 
 if __name__ == "__main__":
-    default = "imagery/all_geotiffs/Seattle_01_20260502.tif"
+    default = "data/cold/imagery/Seattle_01_20260502.tif"
     main(sys.argv[1] if len(sys.argv) > 1 else default)

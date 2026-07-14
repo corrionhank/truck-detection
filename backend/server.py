@@ -24,8 +24,8 @@ from flask import Flask, jsonify, request, send_from_directory
 
 import detect_scene as ds
 
-GPKG = REPO / "Annotations-RGB.gpkg"
-GEOTIFF_DIR = REPO / "imagery" / "all_geotiffs"
+GPKG = REPO / "data" / "active" / "Annotations-RGB.gpkg"
+GEOTIFF_DIR = REPO / "data" / "active" / "imagery"
 OUTPUTS = REPO / "outputs"
 DEFAULT_WEIGHTS = "weights/keypoint_rcnn_echo_jitter.pt"
 

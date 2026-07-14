@@ -2,6 +2,11 @@
 
 _Last updated: 2026-07-10._
 
+> **⚠️ Superseded numbers.** Everything below is the **initial 15-vehicle** experiment (3 scenes). The
+> working set is now **339 vehicles / 8 scenes** in `data/active/` (see [DATA.md](DATA.md)); paths have moved
+> under `data/active/`. These results are kept as the historical pipeline-validation record and will be
+> refreshed when the model is retrained on the full set.
+
 First end-to-end pass of the Adamiak-style detector on the data in hand. This is the
 pipeline-validation milestone from [CONTEXT.md](CONTEXT.md) §9 step 5 — **not** a
 model that generalises. Read the data-reality note before quoting any number.

@@ -1,4 +1,4 @@
-# Data reference — annotations, exports, and where every piece lives
+ # Data reference — annotations, exports, and where every piece lives
 
 _The full data path: what the annotation file holds, how it joins to imagery, what gets exported, what the
 model actually consumes, and which file each piece lives in. Verified against the real files and
@@ -6,8 +6,8 @@ model actually consumes, and which file each piece lives in. Verified against th
 
 ## 1. The annotation file (the input labels)
 
-`Annotations-RGB.gpkg`, table `Annotations` — a GeoPackage of points. No pixels, imagery, or colours are
-stored; each row is a real-world coordinate plus tags.
+`data/active/Annotations-RGB.gpkg`, table `Annotations` — a GeoPackage of points. No pixels, imagery, or
+colours are stored; each row is a real-world coordinate plus tags.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -41,11 +41,11 @@ The coordinate is the anchor; the GeoTIFF supplies the pixels.
 
 ## 3. What gets exported (one vehicle = a chip + 3 points)
 
-**The image** — `data/coco/images/<scene>__v<id>.png`
+**The image** — `data/active/coco/images/<scene>__v<id>.png`
 - A **64×64×3 uint8** RGB thumbnail (values `0–255`), cropped centered on the vehicle.
 - RGB = SuperDove **bands 6/4/2 (red/green/blue)**, each **2–98% percentile-stretched to 8-bit**.
 
-**The label** — one record per chip in `data/coco/annotations.json`:
+**The label** — one record per chip in `data/active/coco/annotations.json`:
 ```json
 {"keypoints": [28.1, 29.04, 2,  32.0, 31.94, 2,  36.33, 35.21, 2],
  "bbox": [25.1, 26.04, 14.23, 12.17], "category_id": 1}
@@ -54,7 +54,7 @@ The coordinate is the anchor; the GeoTIFF supplies the pixels.
   `v=2` = labeled & visible.
 - One class `moving_echo`; `bbox` auto-derived from the 3 points (+3 px pad).
 
-Current export: **15 chips / 15 records** (one per complete vehicle).
+Current export: **339 chips / 339 records** across 8 scenes (one per complete vehicle).
 
 ## 4. What the model consumes — and what it ignores
 
@@ -69,19 +69,23 @@ Current export: **15 chips / 15 records** (one per complete vehicle).
 
 ## 5. File map
 
+Data is organized into a hot **`data/active/`** working set and a **`data/cold/`** archive.
+
 | Data | File(s) | Format |
 |---|---|---|
-| 64×64 RGB chip (model input) | `data/coco/images/<scene>__v<id>.png` | 64×64×3 uint8 PNG |
-| keypoints + bbox + class (target) | `data/coco/annotations.json` | COCO-keypoints JSON |
-| original 8-band, 16-bit reflectance | `imagery/all_geotiffs/<scene>.tif` | 8-band uint16 GeoTIFF |
-| world-coordinate annotation points | `Annotations-RGB.gpkg`, table `Annotations` | GeoPackage |
+| 64×64 RGB chip (model input) | `data/active/coco/images/<scene>__v<id>.png` | 64×64×3 uint8 PNG |
+| keypoints + bbox + class (target) | `data/active/coco/annotations.json` | COCO-keypoints JSON |
+| 8-band 16-bit reflectance (labeled scenes) | `data/active/imagery/<scene>.tif` | 8-band uint16 GeoTIFF |
+| world-coordinate annotation points | `data/active/Annotations-RGB.gpkg`, table `Annotations` | GeoPackage |
+| unlabeled scenes (archive) | `data/cold/imagery/<scene>.tif` | 8-band uint16 GeoTIFF |
 | trained model | `weights/keypoint_rcnn_echo.pt`, `..._jitter.pt` | PyTorch state dict |
 
 The join that ties imagery + labels together is `src/export_coco.py`.
 
 ## Notes
-- **`data/coco/`, `imagery/`, and `weights/` are gitignored** — on disk, not on GitHub. Only the labels
-  (`Annotations-RGB.gpkg`) and `src/` code are committed, so a fresh clone **regenerates** the chips by
-  running `export_coco.py` rather than downloading them.
+- **All imagery (`data/active/imagery/`, `data/cold/`), `data/active/coco/`, and `weights/` are gitignored**
+  — on disk, not on GitHub. The **only** data file tracked in git is `data/active/Annotations-RGB.gpkg`
+  (the labels). A fresh clone has the labels but must be given the imagery, then **regenerates** the chips
+  by running `export_coco.py`.
 - For the external labeling-tool version of this contract (parity checks, acceptance tests), see
   [LABELING_TOOL_CONTRACT.md](LABELING_TOOL_CONTRACT.md).

@@ -29,7 +29,7 @@ from export_coco import load_vehicles, RED, GREEN, BLUE, stretch_params, apply_s
 
 CHIP = 64
 HALF = CHIP // 2
-GEOTIFF_DIR = REPO / "imagery" / "all_geotiffs"
+GEOTIFF_DIR = REPO / "data" / "active" / "imagery"
 WEIGHTS = REPO / "weights" / "keypoint_rcnn_echo_jitter.pt"
 
 

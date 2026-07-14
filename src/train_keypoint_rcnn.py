@@ -33,7 +33,7 @@ from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from torchvision.models.detection.keypoint_rcnn import KeypointRCNNPredictor
 
 REPO = Path(__file__).resolve().parent.parent
-COCO_DIR = REPO / "data" / "coco"
+COCO_DIR = REPO / "data" / "active" / "coco"
 WEIGHTS = REPO / "weights" / "keypoint_rcnn_echo.pt"
 NUM_KP = 3        # blue, red, green
 NUM_CLASSES = 2   # background + moving_echo
