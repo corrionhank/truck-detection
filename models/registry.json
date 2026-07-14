@@ -1,0 +1,112 @@
+{
+  "_comment": "Model registry / experiment log. Each entry records how a model was trained, its results, and findings. Weights live in weights/ (gitignored, large); this JSON (metadata + notes) is committed so past efforts are recoverable. 'active' = the model the Inference tab / backend runs by default. status: active | archived. Edit notes freely, or via the Models tab.",
+  "active": "kprcnn-centralia-heldout",
+  "models": [
+    {
+      "id": "kprcnn-echo-v0",
+      "name": "Keypoint R-CNN v0 (overfit demo)",
+      "weights": "keypoint_rcnn_echo.pt",
+      "status": "archived",
+      "created": "2026-07-10",
+      "arch": {
+        "backbone": "resnet50-fpn",
+        "anchors": "default",
+        "classes": 2,
+        "keypoints": 3,
+        "min_size": 192,
+        "max_size": 320
+      },
+      "train": {
+        "vehicles": 15,
+        "scenes": [
+          "Bellingham_01_20260425",
+          "Centralia_02_20260511",
+          "Stanwood_08_20260504"
+        ],
+        "epochs": 40,
+        "batch": 2,
+        "lr": 0.002,
+        "aug": "none",
+        "device": "cpu",
+        "script": "src/train_keypoint_rcnn.py"
+      },
+      "metrics": {
+        "chip_kp_err_px": 0.18,
+        "full_scene_recall": 0.0
+      },
+      "notes": "First end-to-end pass \u2014 validated the pipeline (export -> train -> infer). Overfits: trained and evaluated on the SAME 15 centered chips (0.18 px error), but found 0 trucks on a coarse full-scene sliding window. MISTAKE FOUND: all crops were pixel-centered, so the model learned 'echo at dead center' and had no translation tolerance. Also: MPS (Apple GPU) produced NaN losses -> forced CPU. Superseded by the jitter model."
+    },
+    {
+      "id": "kprcnn-echo-jitter",
+      "name": "Keypoint R-CNN v1 (+ translation jitter)",
+      "weights": "keypoint_rcnn_echo_jitter.pt",
+      "status": "archived",
+      "created": "2026-07-10",
+      "arch": {
+        "backbone": "resnet50-fpn",
+        "anchors": "default",
+        "classes": 2,
+        "keypoints": 3,
+        "min_size": 192,
+        "max_size": 320
+      },
+      "train": {
+        "vehicles": 15,
+        "scenes": [
+          "Bellingham_01_20260425",
+          "Centralia_02_20260511",
+          "Stanwood_08_20260504"
+        ],
+        "epochs": 30,
+        "batch": 2,
+        "lr": 0.005,
+        "aug": "jitter(+-20px)+flip",
+        "device": "cpu",
+        "script": "src/train_keypoint_rcnn_jitter.py"
+      },
+      "metrics": {
+        "coarse_scene_recall": 1.0,
+        "note": "3/3 on Stanwood_08 at stride 40"
+      },
+      "notes": "FINDING (good): translation-jitter augmentation fixed the overfit-to-center problem. Coarse-stride sliding window recovered 3/3 trucks (vs 0/3 for v0), confidence jumped ~0.4 -> ~0.9. Still only 15 vehicles / 3 scenes, so it doesn't generalize across scenes. This is the model the backend used before the Centralia model."
+    },
+    {
+      "id": "kprcnn-centralia-heldout",
+      "name": "Keypoint R-CNN (Centralia, small anchors)",
+      "weights": "kprcnn_heldout_Tacoma-Centralia_01_20260429.pt",
+      "status": "active",
+      "created": "2026-07-13",
+      "arch": {
+        "backbone": "resnet50-fpn",
+        "anchors": "small",
+        "classes": 2,
+        "keypoints": 3,
+        "min_size": 192,
+        "max_size": 320
+      },
+      "train": {
+        "vehicles": 213,
+        "scenes": [
+          "Centralia_01_20260511",
+          "Centralia_02_20260511",
+          "Tacoma-Centralia_02_20260602"
+        ],
+        "epochs": 12,
+        "batch": 4,
+        "lr": 0.005,
+        "aug": "rich(rotate+scale+photometric+jitter+flip)",
+        "anchors": "small(8-128px)",
+        "device": "cpu",
+        "script": "src/viz_heldout.py"
+      },
+      "metrics": {
+        "heldout_scene": "Tacoma-Centralia_01_20260429",
+        "heldout_recall": 0.4,
+        "heldout_precision": 0.68,
+        "heldout_f1": 0.5,
+        "heldout_kp_err_px": 1.2
+      },
+      "notes": "Trained on 3 Centralia scenes for the held-out visualization. Small anchors (8-128px, per Adamiak) for the tiny 4-8px streaks. FINDINGS: full-scene held-out F1 ~0.50 matches Van Etten 2024's PlanetScope truck F1 (0.49). False positives = bright road/lane-paint; misses concentrated in DENSE traffic (dedup merges neighbours) - a known failure in both papers. Currently the backend default. NOTE: trained on only 3 of the 4 Centralia scenes; a production model on all 339 is the next step."
+    }
+  ]
+}

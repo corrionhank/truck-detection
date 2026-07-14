@@ -123,6 +123,25 @@ input[type=number] { font-feature-settings: "tnum" 1; }
 .stat { gap: 4px; }
 .stat b { font-family: var(--font-display); font-size: 24px; font-weight: 600; font-feature-settings: "tnum" 1; }
 
+/* ---- detection result metric tiles ---- */
+.metric-row { display: flex; flex-wrap: wrap; gap: 10px; }
+.metric { flex: 1 1 118px; min-width: 106px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-ctl); padding: 10px 12px; }
+.metric-label { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--text-3); }
+.metric-value { font-family: var(--font-display); font-size: 20px; font-weight: 600; font-feature-settings: "tnum" 1; margin-top: 2px; color: var(--text); }
+.metric-sub { font-size: 11px; color: var(--text-3); margin-top: 1px; }
+
+/* ---- model registry cards ---- */
+.model { gap: 10px; }
+.model-active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.model-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12.5px; color: var(--text-2); }
+.model-meta b { color: var(--text); font-weight: 600; }
+.model-notes { font-size: 13px; color: var(--text-2); line-height: 1.5; white-space: pre-wrap; background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--r-ctl); padding: 8px 10px; cursor: text; }
+.model-notes:hover { border-color: var(--accent); }
+.notes-area { width: 100%; box-sizing: border-box; font-family: inherit; font-size: 13px; line-height: 1.5; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-ctl); padding: 8px 10px; resize: vertical; }
+.ghost { display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; background: transparent; border: 1px solid var(--border); color: var(--text-2); border-radius: var(--r-ctl); font-size: 12.5px; font-weight: 500; cursor: pointer; }
+.ghost:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.ghost:disabled { opacity: .45; cursor: default; }
+
 .quota-num { font-family: var(--font-display); font-size: 24px; font-weight: 600; font-feature-settings: "tnum" 1; }
 .quota-sub { color: var(--text-3); font-size: 16px; }
 
