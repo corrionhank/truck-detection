@@ -2,9 +2,9 @@
 
 The model reference for the moving-echo detector: the method we replicate (Adamiak 2025), the annotation →
 COCO pipeline it needs, and the lessons from our own runs. For *how to improve* the current model see
-[REFINEMENT.md](REFINEMENT.md). The old model code + results are archived (deliberate rebuild) — per-model
-methodology cards in [`../archive/models/cards/`](../archive/models/) and the
-[registry](../archive/models/registry.json); see [`../archive/README.md`](../archive/README.md).
+[REFINEMENT.md](REFINEMENT.md); for per-model results see the cards in [`../models/cards/`](../models/) and the
+[registry](../models/registry.json). The *training* scripts are being rebuilt (archived in `archive/src/`); the
+models they produced still run — see [`../archive/README.md`](../archive/README.md).
 
 ---
 

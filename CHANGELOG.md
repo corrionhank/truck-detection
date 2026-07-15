@@ -5,6 +5,24 @@ Running log of what changed and what we learned. Newest first. For the current d
 
 ---
 
+## 2026-07-15 — Narrow the archive to *training only* (console + inference restored)
+
+The prior teardown over-reached: it archived the whole modeling stack, including the console pages and the
+inference/registry path. Corrected to archive **only the training scripts**, keeping the rest usable.
+
+- **Restored to active:** `src/detect_scene.py` (inference), `src/model_registry.py` + `models/` + `weights/`
+  (the registry + trained models), the full backend (`/api/models*`, `/api/detect`, `/outputs`), and the
+  **five-tab console** (Dataset / Results / Models / Inference / Spec). The existing models run again.
+- **Kept archived (training experiments only):** `train_model.py`, `crossval_keypoint.py`,
+  `train_keypoint_rcnn*.py`, `viz_heldout.py`, `infer_keypoints.py` — in `archive/src/`.
+- **Decoupled inference from training:** `detect_scene.py` now builds its model graph via the self-contained
+  `model_registry` instead of importing from `train_keypoint_rcnn`, so inference no longer depends on any
+  archived script. Repointed the registry's `train.script` paths to `archive/src/`.
+- Verified: console type-checks + builds, backend imports with all endpoints and preloads the active model,
+  `detect_scene` imports with no training-code dependency.
+
+---
+
 ## 2026-07-15 — Modeling teardown: rebuilding from scratch
 
 Deliberate reset of the modeling path (the old pipeline worked but was built ahead of understanding). **Nothing
@@ -43,10 +61,11 @@ findings), viewable via a "▸ Methodology" expander in the Models tab (`GET /ap
 calibration, geometry filter, dedup radius, train-on-339, anchor sweep, segmentation, …).
 
 **Documentation overhaul** — added [`CLAUDE.md`](CLAUDE.md) (operating manual + hard rules) and
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (system data-flow). Consolidated 13 docs → 9, all refreshed:
-merged `DATA_LANDSCAPE`→`DATA` §6, `APPROACHES` + `MODEL` lessons → `MODELING`, `TRAINING_DATA_REQUEST` +
-`LABELING_TOOL_CONTRACT` → `LABELING_CONTRACT`, `MINIMAL_TRAINING_REPO` → `HARDWARE`; folded `TODO`'s open
-sensor/velocity questions into `CONTEXT`; deleted the superseded `MODEL.md`. Refreshed stale counts (15→8
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (system data-flow). Consolidated the docs, all refreshed:
+merged `DATA_LANDSCAPE`→`DATA` §6, `APPROACHES` + `MODEL` lessons → `MODELING`, `MINIMAL_TRAINING_REPO` →
+`HARDWARE`; folded `TODO`'s open sensor/velocity questions into `CONTEXT`; dropped `MODEL.md`,
+`TRAINING_DATA_REQUEST.md`, and `LABELING_TOOL_CONTRACT.md` (the labeling-contract docs weren't needed).
+Refreshed stale counts (15→8
 scenes, 16→339 vehicles) across docs + the console Spec tab. Pinned `.claude/settings.local.json` in
 `.gitignore` so a fresh clone honours it.
 

@@ -1,11 +1,13 @@
-# Truck Detection — Data Console
+# Truck Detection — Web Console
 
 React + Vite + TypeScript frontend, using the **SFS design system** (plain CSS custom properties in
 `src/styles.css` — no Tailwind, no component library).
 
-**Data-only.** The modeling views (Results / Models / Inference) were archived during the deliberate modeling
-rebuild — the model-capable console is preserved at [`../archive/frontend/App.tsx`](../archive/frontend/App.tsx).
-This console shows the real annotation dataset; re-add the modeling views when the new pipeline exists.
+Five tabs backed by the Flask API (`python3 backend/server.py` on :8787; Vite proxies `/api` + `/outputs`):
+**Dataset** (live label counts), **Results** (cross-validation + full-scene numbers), **Models** (browse /
+activate / archive / annotate models, view methodology cards), **Inference** (run the active model on a scene),
+**Spec** (the annotation contract). The *training* scripts behind the models are archived (`archive/src/`), but
+inference and the registry are live, so the console runs the existing models.
 
 ## Run
 
@@ -26,10 +28,6 @@ npm run dev        # http://localhost:5173
   small app-shell layout.
 - `src/useTheme.ts` — light/dark toggle; writes `data-theme` on `<html>`, persists to
   `localStorage`. The pre-paint script in `index.html` prevents a flash on reload.
-- `src/App.tsx` — the shell: dark-chrome topbar (wordmark + theme toggle) and two views:
-  **Dataset** (live label counts from `GET /api/dataset`, per-scene coverage) and **Spec**
-  (the annotation contract, rendered from `src/docs/annotations-spec.md`).
-
-Data is live from the backend (`python3 backend/server.py` on :8787; Vite proxies `/api`). Some CSS classes in
-`styles.css` (e.g. `.model`, `.metric`) are now unused by the data-only console but kept for the model-view
-rebuild.
+- `src/App.tsx` — the shell (dark-chrome topbar + theme toggle) and the five tab views
+  (Dataset / Results / Models / Inference / Spec), built from the universal components. Data is
+  live from the backend; the Spec tab renders `src/docs/annotations-spec.md`.

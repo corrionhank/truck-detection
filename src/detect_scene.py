@@ -2,7 +2,7 @@
 """
 Sliding-window inference over a whole SuperDove scene.
 
-The chip-level eval (infer_keypoints.py) tests the model on the exact 64x64 crops
+The chip-level eval (archive/src/infer_keypoints.py) tests the model on the exact 64x64 crops
 it trained on. This tests the *deployment* path: take a raw GeoTIFF, slide the
 detector across the road corridor, keep confident moving-echo detections, dedupe
 across overlapping windows, and map each back to a map coordinate.
@@ -24,9 +24,12 @@ import rasterio
 import torch
 from PIL import Image, ImageDraw
 
-from train_keypoint_rcnn import build_model, WEIGHTS, REPO
+# Model graph comes from the (self-contained) registry builder, so inference stays
+# independent of the archived training scripts. See archive/README.md.
+from model_registry import REPO, build_model as _build_model
 from export_coco import RED, GREEN, BLUE, stretch_params, apply_stretch
 
+WEIGHTS = REPO / "weights" / "keypoint_rcnn_echo.pt"  # default for the standalone CLI
 GEOTIFF_DIR = REPO / "data" / "active" / "imagery"
 CHIP = 64
 KP_COLORS = [(80, 140, 255), (255, 70, 70), (70, 220, 90)]  # blue, red, green
@@ -83,12 +86,14 @@ def make_det_montage(scene, rgb, kept, gt_reds):
     print(f"det montage: {out.relative_to(REPO)}")
 
 
-def load_model(weights=None):
-    """Load a Keypoint R-CNN once; reuse across detect() calls (e.g. a server)."""
+def load_model(weights=None, anchors="default"):
+    """Load a Keypoint R-CNN once from a raw weights path (standalone CLI use).
+    `anchors` must match how the weights were trained. The backend does NOT use this —
+    it builds + loads via model_registry (which stores each model's anchor set)."""
     wpath = Path(weights) if weights else WEIGHTS
     if not wpath.is_absolute():
         wpath = REPO / wpath
-    model = build_model()
+    model = _build_model({"anchors": anchors})
     model.load_state_dict(torch.load(wpath, map_location="cpu"))
     model.eval()
     return model
@@ -201,9 +206,9 @@ def detect(model, scene, stride=40, thresh=0.3, min_valid=0.15, batch=12):
     }
 
 
-def main(scene, stride, thresh, min_valid, batch, weights):
-    model = load_model(weights)
-    print(f"weights: {(Path(weights) if weights else WEIGHTS)}")
+def main(scene, stride, thresh, min_valid, batch, weights, anchors):
+    model = load_model(weights, anchors)
+    print(f"weights: {(Path(weights) if weights else WEIGHTS)}  (anchors={anchors})")
     result = detect(model, scene, stride=stride, thresh=thresh,
                     min_valid=min_valid, batch=batch)
     print(f"-> {result['count']} detections; montage outputs/{result['montage']}")
@@ -217,4 +222,6 @@ if __name__ == "__main__":
     ap.add_argument("--min_valid", type=float, default=0.15)
     ap.add_argument("--batch", type=int, default=12)
     ap.add_argument("--weights", default=None, help="override weights path")
+    ap.add_argument("--anchors", choices=["small", "default"], default="default",
+                    help="anchor set the weights were trained with")
     main(**vars(ap.parse_args()))

@@ -28,7 +28,7 @@
         "lr": 0.002,
         "aug": "none",
         "device": "cpu",
-        "script": "src/train_keypoint_rcnn.py"
+        "script": "archive/src/train_keypoint_rcnn.py"
       },
       "metrics": {
         "chip_kp_err_px": 0.18,
@@ -63,7 +63,7 @@
         "lr": 0.005,
         "aug": "jitter(+-20px)+flip",
         "device": "cpu",
-        "script": "src/train_keypoint_rcnn_jitter.py"
+        "script": "archive/src/train_keypoint_rcnn_jitter.py"
       },
       "metrics": {
         "coarse_scene_recall": 1.0,
@@ -99,7 +99,7 @@
         "aug": "rich(rotate+scale+photometric+jitter+flip)",
         "anchors": "small(8-128px)",
         "device": "cpu",
-        "script": "src/viz_heldout.py"
+        "script": "archive/src/viz_heldout.py"
       },
       "metrics": {
         "heldout_scene": "Tacoma-Centralia_01_20260429",
@@ -139,7 +139,7 @@
         "aug": "none",
         "anchors": "default",
         "device": "cpu",
-        "script": "src/train_model.py"
+        "script": "archive/src/train_model.py"
       },
       "metrics": {
         "heldout_scene": "Tacoma-Centralia_01_20260429",

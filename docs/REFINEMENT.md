@@ -1,8 +1,9 @@
 # Refining the model — a prioritized playbook
 
-The open items for the **modeling rebuild**, ordered by return-on-effort. Grounded in this project's findings
-([CHANGELOG.md](../CHANGELOG.md)) and the two reference papers (Adamiak 2025, Van Etten 2024). The old pipeline
-these build on is archived — see [`../archive/README.md`](../archive/README.md) and
+The open items for the **training rebuild**, ordered by return-on-effort. Grounded in this project's findings
+([CHANGELOG.md](../CHANGELOG.md)) and the two reference papers (Adamiak 2025, Van Etten 2024). The training
+scripts these build on are archived (`archive/src/`) — but the model registry, weights, and inference are
+active, so the existing models still run. See [`../archive/README.md`](../archive/README.md) and
 [MODELING.md](MODELING.md).
 
 **Rule for all of it:** measure every change on the **same held-out scene** using leave-one-scene-out (never a

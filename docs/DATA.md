@@ -78,7 +78,7 @@ Data is organized into a hot **`data/active/`** working set and a **`data/cold/`
 | 8-band 16-bit reflectance (labeled scenes) | `data/active/imagery/<scene>.tif` | 8-band uint16 GeoTIFF |
 | world-coordinate annotation points | `data/active/Annotations-RGB.gpkg`, table `Annotations` | GeoPackage |
 | unlabeled scenes (archive) | `data/cold/imagery/<scene>.tif` | 8-band uint16 GeoTIFF |
-| trained models (archived) | `archive/weights/<id>.pt` (indexed by [`archive/models/registry.json`](../archive/models/registry.json)) | PyTorch state dict |
+| trained models | `weights/<id>.pt` (indexed by [`models/registry.json`](../models/registry.json)) | PyTorch state dict |
 
 The join that ties imagery + labels together is `src/export_coco.py`.
 
@@ -103,13 +103,10 @@ exports cleanly to COCO (339/339, 0 dropped), every vehicle a complete B/R/G tri
 essentially the same corridor). The rest spans Ellensburg (I-90), Bellingham + Stanwood (north I-5). Volume is
 strong; diversity is concentrated, so the next labels are worth more on **new corridors** than more Centralia.
 **10 unlabeled scenes** (Seattle + 9 more Stanwood dates) are archived in `data/cold/`; the corpus is frozen
-until the Planet quota resets (see [CONTEXT.md](CONTEXT.md)). What each label should look like for an external
-labeler is the [LABELING_CONTRACT.md](LABELING_CONTRACT.md).
+until the Planet quota resets (see [CONTEXT.md](CONTEXT.md)).
 
 ## Notes
-- **All imagery (`data/active/imagery/`, `data/cold/`), `data/active/coco/`, and `archive/weights/` are gitignored**
+- **All imagery (`data/active/imagery/`, `data/cold/`), `data/active/coco/`, and `weights/` are gitignored**
   — on disk, not on GitHub. The **only** data file tracked in git is `data/active/Annotations-RGB.gpkg`
   (the labels). A fresh clone has the labels but must be given the imagery, then **regenerates** the chips
   by running `export_coco.py`.
-- For the external labeling-tool version of this contract (parity checks, acceptance tests), see
-  [LABELING_CONTRACT.md](LABELING_CONTRACT.md).
