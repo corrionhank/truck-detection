@@ -33,18 +33,19 @@ fraction of a second apart; each vehicle is labeled as 3 points, one per band.
 
 | metric | value |
 |---|---|
-| points | 47 |
-| vehicles | 16 |
-| **usable (complete)** | **15** |
-| scenes | 3 |
+| keypoints | 1,017 |
+| vehicles | 339 |
+| **usable (complete)** | **339** |
+| scenes | 8 |
 
-Scenes: `Bellingham_01_20260425`, `Centralia_02_20260511`, `Stanwood_08_20260504`.
+~91% is the Centralia / south-I-5 corridor; the rest spans Ellensburg (I-90), Bellingham and Stanwood
+(north I-5). Per-scene breakdown in `docs/DATA.md` §6.
 
 ## Known data quirks (handled in export)
 
-- **Incomplete vehicle** — `vehicle_id 16` has only sequences `[1, 2]` → skipped.
-- **Whitespace scene** — one point's `scene` has a leading space (`" Bellingham_01_20260425"`)
-  → `.strip()` before the filename lookup, or that vehicle fails to match its raster.
+- **Incomplete vehicle** — any `vehicle_id` without all three sequences `{1,2,3}` is counted and skipped.
+- **Whitespace scene** — a `scene` with a stray leading space (`" Bellingham_01…"`) is `.strip()`-ed before
+  the filename lookup, or that vehicle fails to match its raster.
 
 ## Export → COCO keypoints
 

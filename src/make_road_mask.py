@@ -12,7 +12,7 @@ What it does:
   5. Write the mask GeoTIFF + a QA overlay PNG so you can eyeball the alignment.
 
 This is the label half of the U-Net pipeline. The buffer half-width is the knob that sets
-the "precision ceiling" (APPROACHES.md 1.4): too wide and the model just learns the buffer,
+the "precision ceiling" (see docs/MODELING.md, road segmentation): too wide and the model just learns the buffer,
 too tight and it misses pavement. Tune it by looking at the overlay.
 
 Run:

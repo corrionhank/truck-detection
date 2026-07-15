@@ -1,8 +1,11 @@
-# Truck Detection — Web Console
+# Truck Detection — Data Console
 
-Basic React + Vite + TypeScript frontend for the ML training/inference + data-storage
-app, using the **SFS design system** (plain CSS custom properties in `src/styles.css` —
-no Tailwind, no component library).
+React + Vite + TypeScript frontend, using the **SFS design system** (plain CSS custom properties in
+`src/styles.css` — no Tailwind, no component library).
+
+**Data-only.** The modeling views (Results / Models / Inference) were archived during the deliberate modeling
+rebuild — the model-capable console is preserved at [`../archive/frontend/App.tsx`](../archive/frontend/App.tsx).
+This console shows the real annotation dataset; re-add the modeling views when the new pipeline exists.
 
 ## Run
 
@@ -23,9 +26,10 @@ npm run dev        # http://localhost:5173
   small app-shell layout.
 - `src/useTheme.ts` — light/dark toggle; writes `data-theme` on `<html>`, persists to
   `localStorage`. The pre-paint script in `index.html` prevents a flash on reload.
-- `src/App.tsx` — the shell: dark-chrome topbar (wordmark + theme toggle) and three
-  views (Dataset / Training / Inference) built from the universal components.
+- `src/App.tsx` — the shell: dark-chrome topbar (wordmark + theme toggle) and two views:
+  **Dataset** (live label counts from `GET /api/dataset`, per-scene coverage) and **Spec**
+  (the annotation contract, rendered from `src/docs/annotations-spec.md`).
 
-**All data shown is mock/placeholder** — there's no backend yet. Swap the `SCENES` /
-`RUNS` constants in `App.tsx` for real data (e.g. counts from `Annotations-RGB.gpkg`
-and training runs) when the API exists.
+Data is live from the backend (`python3 backend/server.py` on :8787; Vite proxies `/api`). Some CSS classes in
+`styles.css` (e.g. `.model`, `.metric`) are now unused by the data-only console but kept for the model-view
+rebuild.

@@ -34,6 +34,13 @@ weights/
 
 # --- Editor / IDE ---
 .vscode/
+.idea/
+
+# --- Claude Code (agent config) ---
+# CLAUDE.md (repo root) and shared .claude/settings.json ARE tracked; per-user
+# local settings are not. (Also covered by the global ignore on this machine,
+# but pinned here so a fresh clone honours it too.)
+.claude/settings.local.json
 
 # --- Exploratory C++ inspection tool + concept/learning material ---
 # (kept locally alongside the project, intentionally not committed)

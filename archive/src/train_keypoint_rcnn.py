@@ -8,7 +8,7 @@ capture order blue -> red -> green.
 
 DATA REALITY: only ~15 labelled vehicles across 3 scenes exist right now. That is
 far too few to train a model that generalises (Adamiak had 3,236). This script is
-the end-to-end pipeline validation called for in CONTEXT.md sec 9 step 5 -- it will
+the end-to-end pipeline-validation milestone (the original v0 model) -- it will
 *overfit*. We start from COCO-pretrained weights (transfer learning) so the tiny
 dataset has a fighting chance of placing keypoints sensibly.
 

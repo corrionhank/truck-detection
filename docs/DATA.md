@@ -78,14 +78,38 @@ Data is organized into a hot **`data/active/`** working set and a **`data/cold/`
 | 8-band 16-bit reflectance (labeled scenes) | `data/active/imagery/<scene>.tif` | 8-band uint16 GeoTIFF |
 | world-coordinate annotation points | `data/active/Annotations-RGB.gpkg`, table `Annotations` | GeoPackage |
 | unlabeled scenes (archive) | `data/cold/imagery/<scene>.tif` | 8-band uint16 GeoTIFF |
-| trained model | `weights/keypoint_rcnn_echo.pt`, `..._jitter.pt` | PyTorch state dict |
+| trained models (archived) | `archive/weights/<id>.pt` (indexed by [`archive/models/registry.json`](../archive/models/registry.json)) | PyTorch state dict |
 
 The join that ties imagery + labels together is `src/export_coco.py`.
 
+## 6. Current corpus (snapshot)
+
+**339 vehicles / 1,017 keypoints across 8 labeled scenes** (up ~21× from an initial 16). Format-validated:
+exports cleanly to COCO (339/339, 0 dropped), every vehicle a complete B/R/G triple, EPSG:32610.
+
+| Scene | Corridor | Vehicles |
+|---|---|---:|
+| Tacoma-Centralia_02_20260602 | south I-5 | 101 |
+| Tacoma-Centralia_01_20260429 | south I-5 | 94 |
+| Centralia_01_20260511 | south I-5 | 58 |
+| Centralia_02_20260511 | south I-5 | 54 |
+| Ellensburg_01_20260504 | I-90 | 13 |
+| Bellingham_01_20260425 | north I-5 | 11 |
+| Stanwood_10_20260511 | north I-5 | 6 |
+| EllensburgPreferredTest_01_20260530 | I-90 (test) | 2 |
+| **Total** | | **339** |
+
+**The diversity caveat:** ~91 % (307/339) is one region — greater Centralia / Tacoma south-I-5 (4 scenes of
+essentially the same corridor). The rest spans Ellensburg (I-90), Bellingham + Stanwood (north I-5). Volume is
+strong; diversity is concentrated, so the next labels are worth more on **new corridors** than more Centralia.
+**10 unlabeled scenes** (Seattle + 9 more Stanwood dates) are archived in `data/cold/`; the corpus is frozen
+until the Planet quota resets (see [CONTEXT.md](CONTEXT.md)). What each label should look like for an external
+labeler is the [LABELING_CONTRACT.md](LABELING_CONTRACT.md).
+
 ## Notes
-- **All imagery (`data/active/imagery/`, `data/cold/`), `data/active/coco/`, and `weights/` are gitignored**
+- **All imagery (`data/active/imagery/`, `data/cold/`), `data/active/coco/`, and `archive/weights/` are gitignored**
   — on disk, not on GitHub. The **only** data file tracked in git is `data/active/Annotations-RGB.gpkg`
   (the labels). A fresh clone has the labels but must be given the imagery, then **regenerates** the chips
   by running `export_coco.py`.
 - For the external labeling-tool version of this contract (parity checks, acceptance tests), see
-  [LABELING_TOOL_CONTRACT.md](LABELING_TOOL_CONTRACT.md).
+  [LABELING_CONTRACT.md](LABELING_CONTRACT.md).
