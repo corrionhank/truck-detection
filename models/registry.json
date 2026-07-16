@@ -147,6 +147,65 @@
         "heldout_kp_err_px": 0.7
       },
       "notes": "BASELINE: default anchors (32-512px), NO augmentation, no data engineering. The zero-effort reference to measure every refinement against."
+    },
+    {
+      "id": "kprcnn-adamiak-v1",
+      "name": "Keypoint R-CNN (Adamiak v1)",
+      "weights": "kprcnn-adamiak-v1.pt",
+      "status": "archived",
+      "created": "2026-07-15",
+      "card": "cards/kprcnn-adamiak-v1.md",
+      "arch": {
+        "backbone": "resnet50-fpn",
+        "anchors": "custom",
+        "anchor_sizes": [
+          4,
+          8,
+          16,
+          32,
+          48
+        ],
+        "aspect_ratios": [
+          0.25,
+          0.5,
+          0.75,
+          1.0,
+          1.25
+        ],
+        "classes": 2,
+        "keypoints": 3,
+        "min_size": 192,
+        "max_size": 320
+      },
+      "train": {
+        "vehicles": 216,
+        "scenes": [
+          "Bellingham_01_20260425",
+          "Centralia_01_20260511",
+          "Centralia_02_20260511",
+          "EllensburgPreferredTest_01_20260530",
+          "Ellensburg_01_20260504",
+          "Stanwood_10_20260511",
+          "Tacoma-Centralia_02_20260602"
+        ],
+        "epochs": 12,
+        "batch": 4,
+        "lr": 0.001,
+        "aug": "rotate+flip+brightness+perspective (Adamiak)",
+        "finetune": "COCO-pretrained backbone (weights=DEFAULT)",
+        "device": "cpu",
+        "script": "src/train_detector.py"
+      },
+      "metrics": {
+        "heldout_scene": "Tacoma-Centralia_01_20260429",
+        "eval_thresh": 0.3,
+        "heldout_recall_centered": 0.989,
+        "heldout_kp_err_px": 0.99,
+        "heldout_recall": 0.532,
+        "heldout_precision": 0.485,
+        "heldout_f1": 0.507
+      },
+      "notes": "Fresh Adamiak-spec rebuild (finetuned backbone, 64px chips, small anchors, leave-one-scene-out). First pass \u2014 see the card for methodology and how it relates to base-default and the F1~0.50 benchmark."
     }
   ]
 }

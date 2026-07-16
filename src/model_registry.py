@@ -46,9 +46,17 @@ def get(reg, model_id):
 def build_model(arch):
     """Construct the Keypoint R-CNN graph described by an arch dict (random init;
     weights are loaded separately). weights=None avoids the 226 MB COCO download —
-    load_weights() overwrites everything anyway."""
-    sizes = ANCHOR_SETS[arch.get("anchors", "default")]
-    ag = AnchorGenerator(tuple((s,) for s in sizes), ((0.5, 1.0, 2.0),) * len(sizes))
+    load_weights() overwrites everything anyway.
+
+    Anchor config, in priority order (this is the anchor-sweep hook — vary these in the
+    registry entry and the same weights path retrains/reloads a different graph):
+      - explicit arch["anchor_sizes"] + arch["aspect_ratios"], else
+      - a named arch["anchors"] set from ANCHOR_SETS with default (0.5,1,2) ratios.
+    Both the number of sizes and the number of ratios change the RPN head shape, so the
+    arch stored at train time must match at load time (it does — same dict)."""
+    sizes = tuple(arch["anchor_sizes"]) if arch.get("anchor_sizes") else ANCHOR_SETS[arch.get("anchors", "default")]
+    ratios = tuple(arch.get("aspect_ratios", (0.5, 1.0, 2.0)))
+    ag = AnchorGenerator(tuple((s,) for s in sizes), (ratios,) * len(sizes))
     model = keypointrcnn_resnet50_fpn(
         weights=None, weights_backbone=None,
         min_size=arch.get("min_size", 192), max_size=arch.get("max_size", 320),

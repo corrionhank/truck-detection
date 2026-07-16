@@ -1,43 +1,40 @@
 /* ============================================================================
-   SFS Design System — tokens + universal components (ported from the map tool).
-   Plain CSS custom properties: one :root block + one [data-theme="dark"] block.
+   Truck Detection — ML console. Shares the Satellite Data Tooling Hub design
+   family (same tokens), distinct identity (tabbed console, teal model accent).
+   Dark-only: the dark palette IS :root. To add a light theme later, override
+   these tokens under :root[data-theme="light"] (exactly like the sibling).
    ========================================================================== */
 
 :root {
-  /* top-bar "chrome" — ALWAYS dark, in both themes (fixed brand band) */
-  --chrome-bg:#0F0F11; --chrome-border:rgba(255,255,255,.08); --chrome-text:#F4F4F4; --chrome-dim:#9A9A9A;
+  /* top-bar "chrome" — the brand band */
+  --chrome-bg:#0F0F11; --chrome-border:rgba(255,255,255,.08); --chrome-text:#F4F4F5; --chrome-dim:#9C9CA6;
 
-  /* surfaces (light) — warm off-white bg, white cards */
-  --bg:#F6F4F0; --surface:#FFFFFF; --border:#E6E3DE;
+  /* surfaces (dark) */
+  --bg:#161618; --surface:#202024; --border:#33333A;
 
-  /* text (light) — primary / secondary / tertiary */
-  --text:#1A1A1A; --text-2:#5C5C5C; --text-3:#8A8A8A;
+  /* text — primary / secondary / muted */
+  --text:#F4F4F5; --text-2:#CBCBD2; --text-3:#9C9CA6;
 
-  /* one action color (amber) + semantic */
-  --accent:#DDA032; --accent-hover:#C98E22; --success:#2FA968; --danger:#D1452B;
+  /* brand accent (amber) — the one action color */
+  --accent:#DDA032; --accent-hover:#C98E22;
+  /* secondary accent (teal) — model / inference elements ONLY, amber stays primary */
+  --accent-2:#16B5C2; --accent-2-hover:#12A0AC;
+  /* semantic — status only, never decoration */
+  --success:#2FA968; --danger:#D1452B;
 
-  /* categorical palette (repurpose for ML classes / confidence bands / splits) */
-  --t1:#16B5C2; --t2:#2F9E6B; --t3:#D9A02E; --t4:#E2663C; --t5:#8B6FD0; --gap:#D85FA0;
+  /* secondary palette for charts/status, used sparingly */
+  --t1:#16B5C2; --t2:#2F9E6B; --t3:#E2663C; --t4:#8B6FD0; --gap:#D85FA0;
 
-  /* radii */
+  /* radii — cards / controls / pills */
   --r-pill:999px; --r-card:12px; --r-ctl:8px;
 
-  /* elevation */
-  --shadow-1:0 1px 2px rgba(0,0,0,.06); --shadow-2:0 8px 24px rgba(0,0,0,.10);
-
-  /* interaction tints */
-  --hover:rgba(0,0,0,.05); --code-bg:rgba(0,0,0,.05);
-
-  --font-display:"Space Grotesk",system-ui,sans-serif; --font-body:"Inter",system-ui,sans-serif;
-}
-
-/* dark theme: data-theme="dark" on <html>. Only surfaces/text/shadows/tints flip;
-   chrome, accent, and the categorical palette are SHARED across themes. */
-[data-theme="dark"] {
-  --bg:#161618; --surface:#202024; --border:#33333A;
-  --text:#F4F4F5; --text-2:#CBCBD2; --text-3:#9C9CA6;
+  /* elevation (restrained) + interaction tints */
   --shadow-1:0 1px 2px rgba(0,0,0,.4); --shadow-2:0 10px 28px rgba(0,0,0,.55);
   --hover:rgba(255,255,255,.06); --code-bg:rgba(255,255,255,.08);
+
+  --font-display:"Space Grotesk",system-ui,sans-serif;
+  --font-body:"Inter",system-ui,sans-serif;
+  --font-mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
 }
 
 /* ---- base reset + typography ------------------------------------------- */
@@ -46,11 +43,11 @@ html, body, #root { margin: 0; height: 100%; }
 body { font-family: var(--font-body); background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; }
 
 .page-title { font-family: var(--font-display); font-size: 22px; font-weight: 600; margin: 0; }
-.section-label { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--text-3); }
+.section-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); }
 .hint { font-size: 12px; color: var(--text-3); line-height: 1.45; }
 .muted { color: var(--text-3); }
-.mono { font-family: ui-monospace, monospace; font-size: 12px; }
-code { font-family: ui-monospace, monospace; font-size: 12px; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+.mono { font-family: var(--font-mono); font-size: 12px; }
+code { font-family: var(--font-mono); font-size: 12px; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
 
 /* ---- buttons ----------------------------------------------------------- */
 button { font-family: var(--font-body); cursor: pointer; color: inherit; }
@@ -69,6 +66,7 @@ input[type=text], input[type=number], select {
 }
 input:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(221,160,50,.18); }
 input[type=number] { font-feature-settings: "tnum" 1; }
+input[type=range] { accent-color: var(--accent); }
 
 /* ---- card -------------------------------------------------------------- */
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); padding: 20px; display: flex; flex-direction: column; gap: 8px; }
@@ -109,12 +107,26 @@ input[type=number] { font-feature-settings: "tnum" 1; }
    ========================================================================== */
 .app { min-height: 100%; display: flex; flex-direction: column; }
 
-.topbar { flex: none; height: 52px; background: var(--chrome-bg); border-bottom: 1px solid var(--chrome-border); color: var(--chrome-text); display: flex; align-items: center; justify-content: space-between; padding: 0 16px; }
-.wordmark { font-family: var(--font-display); font-weight: 600; font-size: 16px; color: var(--accent); display: inline-flex; align-items: center; gap: 8px; letter-spacing: .02em; }
+.topbar { flex: none; height: 52px; background: var(--chrome-bg); border-bottom: 1px solid var(--chrome-border); color: var(--chrome-text); display: flex; align-items: center; justify-content: space-between; padding: 0 18px; }
+.topbar-left { display: inline-flex; align-items: center; gap: 14px; }
+.wordmark { font-family: var(--font-display); font-weight: 600; font-size: 16px; color: var(--accent); display: inline-flex; align-items: center; gap: 8px; letter-spacing: .01em; }
 .wm-dim { color: var(--chrome-dim); font-weight: 500; }
-.topbar-right { display: inline-flex; align-items: center; gap: 8px; }
+.topbar-sep { width: 1px; height: 20px; background: var(--chrome-border); }
+/* reciprocal nav to the sibling Satellite Data Tooling Hub */
+.hub-link { color: var(--chrome-dim); font-size: 12.5px; font-weight: 500; text-decoration: none; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.hub-link:hover { color: var(--chrome-text); }
+.env-chip { font-family: var(--font-mono); font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); background: rgba(221,160,50,.14); border: 1px solid rgba(221,160,50,.28); padding: 3px 9px; border-radius: var(--r-pill); }
 .icon-btn { background: none; border: none; color: var(--chrome-text); display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: var(--r-ctl); }
 .icon-btn:hover { color: var(--accent); background: rgba(255,255,255,.06); }
+
+/* masthead one-liner under the kicker + title */
+.masthead-desc { color: var(--text-2); font-size: 14px; line-height: 1.5; margin: 2px 0 4px; max-width: 660px; }
+
+/* teal model-version chip — the ONE secondary accent, model/inference only */
+.chip-model { font-family: var(--font-mono); font-size: 11px; font-weight: 600; letter-spacing: .02em; padding: 2px 9px; border-radius: var(--r-pill); background: rgba(22,181,194,.13); color: var(--accent-2); border: 1px solid rgba(22,181,194,.30); white-space: nowrap; }
+
+/* train/heldout/unseen leakage guard on the inference page */
+.split-banner { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-ctl); background: var(--code-bg); }
 
 .content { flex: 1; overflow: auto; }
 .view { max-width: 960px; margin: 0 auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
@@ -153,7 +165,7 @@ input[type=number] { font-feature-settings: "tnum" 1; }
 .run { gap: 10px; }
 
 /* ---- markdown block (rendered docs / reports) -------------------------- */
-.markdown { color: var(--text); font-size: 14px; line-height: 1.6; }
+.markdown { color: var(--text); font-size: 14px; line-height: 1.6; max-width: 720px; }
 .markdown > *:first-child { margin-top: 0; }
 .markdown h1 { font-family: var(--font-display); font-size: 22px; font-weight: 600; margin: 24px 0 12px; }
 .markdown h2 { font-family: var(--font-display); font-size: 18px; font-weight: 600; margin: 28px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
@@ -164,7 +176,7 @@ input[type=number] { font-feature-settings: "tnum" 1; }
 .markdown a { color: var(--accent); text-decoration: none; }
 .markdown a:hover { text-decoration: underline; }
 .markdown code { font-family: ui-monospace, monospace; font-size: 12px; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
-.markdown pre { background: var(--chrome-bg); color: var(--chrome-text); border-radius: var(--r-ctl); padding: 14px 16px; overflow: auto; margin: 0 0 14px; }
+.markdown pre { background: var(--code-bg); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-ctl); padding: 14px 16px; overflow: auto; margin: 0 0 14px; }
 .markdown pre code { background: none; padding: 0; color: inherit; font-size: 12.5px; }
 .markdown blockquote { margin: 0 0 14px; padding: 4px 0 4px 14px; border-left: 3px solid var(--border); color: var(--text-2); }
 .markdown table { border-collapse: collapse; width: 100%; margin: 0 0 14px; font-size: 13px; }

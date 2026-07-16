@@ -1,9 +1,12 @@
 # --- Data ---
-# Track ONLY the labels (data/active/Annotations-RGB.gpkg). All imagery
-# (Planet EDU-licensed) and generated products stay out of git.
+# Track ONLY the labels (data/active/Annotations-RGB.gpkg) + the inbox README.
+# All imagery (Planet EDU-licensed) and generated products stay out of git.
 data/active/imagery/
 data/active/coco/
+data/active/_backups/
 data/cold/
+data/inbox/*
+!data/inbox/README.md
 imagery/
 outputs/
 cache/

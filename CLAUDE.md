@@ -27,11 +27,12 @@ predicting 3 keypoints (blue/red/green) for 1 class, following Adamiak et al. 20
 
 | Path | What |
 |---|---|
-| `src/` | **active** pipeline: `export_coco.py` (labels + GeoTIFFs → COCO + 64×64 chips), `detect_scene.py` (full-scene inference), `model_registry.py` (build/load any registered model), `inspect_scene.py`, `make_road_mask.py` |
+| `src/` | **active** pipeline: `import_data.py` (ingest dropped data), `export_coco.py` (labels + GeoTIFFs → COCO + 64×64 chips), `train_detector.py` (train + register a model), `detect_scene.py` (full-scene inference), `model_registry.py` (build/load any registered model), `inspect_scene.py`, `make_road_mask.py` |
 | `backend/server.py` | Flask API (port **8787**): `/api/dataset`, `/api/scenes`, `/api/models*`, `/api/detect` |
 | `frontend/` | React + Vite console (port **5173**): Dataset / Results / Models / Inference / Spec |
 | `models/` | the experiment log: `registry.json` (every trained model + metrics + notes) + methodology `cards/` |
 | `weights/` | trained weights (`*.pt`) — **gitignored** (226 MB each), referenced by the registry |
+| `data/inbox/` | **drop zone** for new imagery + annotation sets (gitignored) → `import_data.py` ingests it |
 | `data/active/` | hot set: `Annotations-RGB.gpkg` (labels, **the only data file in git**) + `imagery/` + `coco/` |
 | `data/cold/` | archived unlabeled scenes + old QGIS project — gitignored |
 | **`archive/src/`** | **retired training scripts** (`train_model`, `crossval_keypoint`, `train_keypoint_rcnn*`, `viz_heldout`, `infer_keypoints`) — rebuilding |
@@ -42,10 +43,13 @@ predicting 3 keypoints (blue/red/green) for 1 class, following Adamiak et al. 20
 ## How to run
 
 ```bash
-python3 src/export_coco.py                  # regenerate 64×64 chips from labels + imagery
+# import new data: drop .tif + .gpkg into data/inbox/, then
+python3 src/import_data.py --dry-run         # validate the join; then drop --dry-run to ingest + rebuild chips
+python3 src/export_coco.py                   # (or regenerate 64×64 chips directly from labels + imagery)
+python3 src/train_detector.py --id <id> --name "<name>" --held <scene>   # train + register a model (CPU)
 python3 src/detect_scene.py <scene> --thresh 0.3   # full-scene inference with the default weights
-python3 backend/server.py                   # data + model API on :8787
-cd frontend && npm install && npm run dev    # console on :5173
+python3 backend/server.py                    # data + model API on :8787
+cd frontend && npm install && npm run dev     # console on :5173
 ```
 
 Rebuilding training? The old entry points + the reference setup are in `archive/src/` — see

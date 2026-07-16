@@ -136,6 +136,10 @@ def api_detect():
         return jsonify({"error": str(e)}), 404
     result["model_id"] = entry["id"]
     result["model_name"] = entry["name"]
+    # leakage guard: was this scene in the model's training set? -> metrics on it are inflated
+    trained = entry.get("train", {}).get("scenes", []) or []
+    heldout = entry.get("metrics", {}).get("heldout_scene")
+    result["eval_split"] = "train" if scene in trained else ("heldout" if scene == heldout else "unseen")
     result["montage_url"] = f"/outputs/{result['montage']}"
     result["preview_url"] = f"/outputs/{result['preview']}"
     return jsonify(result)

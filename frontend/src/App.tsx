@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
-import { Moon, Sun, Truck, Play, Database, BarChart3, Layers, ScanLine, FileText, Loader2 } from 'lucide-react'
+import { Truck, Play, Database, BarChart3, Layers, ScanLine, FileText, Loader2 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { useTheme } from './useTheme'
 import annotationsSpec from './docs/annotations-spec.md?raw'
+
+// Sibling app (Satellite Data Tooling Hub) — the reciprocal nav target.
+const HUB_URL = 'http://localhost:5000/'
 
 type Tab = 'dataset' | 'results' | 'models' | 'inference' | 'spec'
 
@@ -29,6 +31,7 @@ type Dataset = {
   per_scene: Record<string, { vehicles: number; echoes: number }>
 }
 type Detection = { score: number; red_utm: [number, number]; keypoints_px: number[][] }
+type Split = 'train' | 'heldout' | 'unseen'
 type DetectResult = {
   scene: string
   count: number
@@ -40,10 +43,27 @@ type DetectResult = {
   preview_url: string
   model_id?: string
   model_name?: string
+  eval_split?: Split
+}
+
+// Is this scene safe to evaluate the selected model on? Derived from the model's own
+// training scenes + its held-out scene — so metrics are never silently read off training data.
+function evalSplit(m: ModelEntry | undefined, scene: string): Split {
+  if (!m || !scene) return 'unseen'
+  if ((m.train?.scenes || []).includes(scene)) return 'train'
+  if (m.metrics?.heldout_scene === scene) return 'heldout'
+  return 'unseen'
+}
+const SPLIT: Record<Split, { label: string; cls: string; mark: string; note: string }> = {
+  train: { label: 'TRAINING SCENE', cls: 's-failed', mark: '⚠ in training',
+    note: 'This scene was in the selected model’s training set — metrics here are leaked (inflated), not a valid generalization estimate.' },
+  heldout: { label: 'HELD-OUT', cls: 's-success', mark: 'held-out',
+    note: 'The model’s designated held-out scene — a clean generalization test.' },
+  unseen: { label: 'UNSEEN', cls: 's-queued', mark: 'unseen',
+    note: 'Not in the model’s training set — a clean scene (metrics valid where labels exist).' },
 }
 
 export default function App() {
-  const { theme, toggle } = useTheme()
   const [tab, setTab] = useState<Tab>('dataset')
   const [scenes, setScenes] = useState<Scene[]>([])
   const [registry, setRegistry] = useState<Registry | null>(null)
@@ -58,20 +78,26 @@ export default function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <div className="wordmark">
-          <Truck size={18} /> SFS <span className="wm-dim">Truck Detection</span>
+        <div className="topbar-left">
+          <div className="wordmark">
+            <Truck size={18} /> Truck Detection
+          </div>
+          <span className="topbar-sep" />
+          <a className="hub-link" href={HUB_URL} title="Go to the Satellite Data Tooling Hub">
+            ← Satellite Data Tooling Hub
+          </a>
         </div>
-        <div className="topbar-right">
-          <button className="icon-btn" onClick={toggle} title="Toggle theme" aria-label="Toggle theme">
-            {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
-          </button>
-        </div>
+        <span className="env-chip">ML Console</span>
       </header>
 
       <main className="content">
         <div className="view">
           <div className="section-label">ML console</div>
           <h1 className="page-title">Truck Detection</h1>
+          <p className="masthead-desc">
+            Training, inference, and the annotation dataset for moving-echo truck detection in
+            PlanetScope SuperDove imagery — the model half of the project.
+          </p>
 
           <div className="segmented" style={{ maxWidth: 560 }}>
             <button className={tab === 'dataset' ? 'active' : ''} onClick={() => setTab('dataset')}>
@@ -257,7 +283,9 @@ function ModelsView({ registry, refresh, onRun }: { registry: Registry | null; r
           return (
             <div key={m.id} className={`card model${isActive ? ' model-active' : ''}`}>
               <div className="row-between">
-                <div><span style={{ fontWeight: 600 }}>{m.name}</span> <span className="mono hint">{m.id}</span></div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontWeight: 600 }}>{m.name}</span> <span className="chip-model">{m.id}</span>
+                </div>
                 <span className={`badge-state ${isActive ? 's-running' : 's-queued'}`}>
                   {isActive ? 'ACTIVE' : m.status}
                 </span>
@@ -395,6 +423,10 @@ function InferenceView({ scenes, registry }: { scenes: Scene[]; registry: Regist
     }
   }
 
+  const model = registry?.models.find((m) => m.id === modelId)
+  const split = evalSplit(model, scene)
+  const si = SPLIT[split]
+
   return (
     <div className="card" style={{ maxWidth: 900 }}>
       <div className="section-label">Run detection</div>
@@ -416,10 +448,16 @@ function InferenceView({ scenes, registry }: { scenes: Scene[]; registry: Regist
       <select value={scene} onChange={(e) => setScene(e.target.value)} disabled={busy}>
         {scenes.map((s) => (
           <option key={s.name} value={s.name}>
-            {s.name}{s.vehicles ? ` · ${s.vehicles} labeled` : ' · unlabeled'}
+            {s.name}{s.vehicles ? ` · ${s.vehicles} labeled` : ' · unlabeled'} · {SPLIT[evalSplit(model, s.name)].mark}
           </option>
         ))}
       </select>
+
+      {/* per-model, per-scene leakage guard: is this scene clean to evaluate on? */}
+      <div className="split-banner" style={{ marginTop: 8 }}>
+        <span className={`badge-state ${si.cls}`}>{si.label}</span>
+        <span className="hint" style={{ margin: 0 }}>{si.note}</span>
+      </div>
 
       <label className="field-label">Confidence threshold: {thresh.toFixed(2)}</label>
       <input
@@ -469,8 +507,27 @@ function ResultPanel({ result, nonce }: { result: DetectResult; nonce: number })
   const pct = (x: number) => `${Math.round(x * 100)}%`
   const signed = (x: number) => `${x >= 0 ? '+' : ''}${Math.round(x * 100)}%`
 
+  const split = result.eval_split
+  const si = split ? SPLIT[split] : null
+
   return (
     <div style={{ marginTop: 16 }}>
+      <div className="row-between" style={{ marginBottom: 10 }}>
+        <span className="section-label">Detections</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {si && <span className={`badge-state ${si.cls}`}>{si.label}</span>}
+          {result.model_name && (
+            <span className="chip-model" title={result.model_id}>{result.model_name}</span>
+          )}
+        </span>
+      </div>
+      {g && split === 'train' && (
+        <div className="statusline err" style={{ marginBottom: 10 }}>
+          <code>[leaked]</code> This scene was in <b>{result.model_name}</b>’s training set — the recall /
+          precision / F1 below are <b>training-set numbers</b> (inflated), not a generalization estimate. Use a
+          held-out or unseen scene to judge the model.
+        </div>
+      )}
       <div className="metric-row">
         <Metric label="Detected" value={result.count} sub={`stride ${result.stride} · thr ${result.thresh}`} />
         {g && <Metric label="Recall" value={pct(recall!)} sub={`${g.recall}/${g.labelled} found`} />}

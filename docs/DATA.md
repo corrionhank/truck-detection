@@ -78,9 +78,29 @@ Data is organized into a hot **`data/active/`** working set and a **`data/cold/`
 | 8-band 16-bit reflectance (labeled scenes) | `data/active/imagery/<scene>.tif` | 8-band uint16 GeoTIFF |
 | world-coordinate annotation points | `data/active/Annotations-RGB.gpkg`, table `Annotations` | GeoPackage |
 | unlabeled scenes (archive) | `data/cold/imagery/<scene>.tif` | 8-band uint16 GeoTIFF |
+| **drop zone for new data** | `data/inbox/` (gitignored) | drop `.tif` + `.gpkg`, then import |
 | trained models | `weights/<id>.pt` (indexed by [`models/registry.json`](../models/registry.json)) | PyTorch state dict |
 
 The join that ties imagery + labels together is `src/export_coco.py`.
+
+## Importing new data (`data/inbox/` → `import_data.py`)
+
+New imagery and annotation sets enter the working set through a drop zone — the manual stand-in for the
+eventual app-to-app pipeline. Drop GeoTIFFs and/or annotation GeoPackages into **`data/inbox/`**, then:
+
+```bash
+python3 src/import_data.py --dry-run   # validate + report the join, change nothing
+python3 src/import_data.py             # ingest + merge + rebuild chips
+```
+
+`src/import_data.py` validates each set against the contract above (layer `Annotations`, EPSG:32610, Point
+geometry, `sequence` 1/2/3, complete B/R/G triples), **checks every `scene` resolves to a GeoTIFF** (the one
+field that silently breaks the join — orphans are reported and skipped, never dropped silently), then moves
+imagery into `data/active/imagery/`, merges labels into `Annotations-RGB.gpkg` (**replace-by-scene**; the gpkg
+is backed up to `data/active/_backups/` first), regenerates the COCO chips, and files processed sets under
+`data/inbox/_processed/`. After import the new scenes appear in the console's Inference tab and
+`train_detector.py --held <scene>` trains on the updated set. Full instructions:
+[`../data/inbox/README.md`](../data/inbox/README.md).
 
 ## 6. Current corpus (snapshot)
 
