@@ -7,6 +7,7 @@ data/active/_backups/
 data/cold/
 data/inbox/*
 !data/inbox/README.md
+data/exports/
 imagery/
 outputs/
 cache/

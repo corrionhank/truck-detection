@@ -27,7 +27,7 @@ predicting 3 keypoints (blue/red/green) for 1 class, following Adamiak et al. 20
 
 | Path | What |
 |---|---|
-| `src/` | **active** pipeline: `import_data.py` (ingest dropped data), `export_coco.py` (labels + GeoTIFFs → COCO + 64×64 chips), `train_detector.py` (train + register a model), `detect_scene.py` (full-scene inference), `model_registry.py` (build/load any registered model), `inspect_scene.py`, `make_road_mask.py` |
+| `src/` | **active** pipeline: `import_data.py` (ingest dropped data / exchange bundles), `export_bundle.py` (reference exchange-bundle exporter), `export_coco.py` (labels + GeoTIFFs → COCO + 64×64 chips), `train_detector.py` (train + register a model), `detect_scene.py` (full-scene inference), `model_registry.py` (build/load any registered model), `inspect_scene.py`, `make_road_mask.py` |
 | `backend/server.py` | Flask API (port **8787**): `/api/dataset`, `/api/scenes`, `/api/models*`, `/api/detect` |
 | `frontend/` | React + Vite console (port **5173**): Dataset / Results / Models / Inference / Spec |
 | `models/` | the experiment log: `registry.json` (every trained model + metrics + notes) + methodology `cards/` |

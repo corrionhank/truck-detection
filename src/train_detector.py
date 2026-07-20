@@ -177,10 +177,10 @@ def eval_full_scene(model, scene, thresh):
 
 
 # ---------------------------------------------------------------- train -----
-def train(train_items, val_items, arch, epochs, batch, lr, repeat, seed, ckpt_path):
+def train(train_items, val_items, arch, epochs, batch, lr, repeat, seed, ckpt_path, aug_on=True):
     torch.manual_seed(seed)
     model = mr.build_model(arch)
-    dl = DataLoader(ChipDS(train_items, repeat, seed, aug=True), batch_size=batch,
+    dl = DataLoader(ChipDS(train_items, repeat, seed, aug=aug_on), batch_size=batch,
                     shuffle=True, collate_fn=collate, num_workers=0)
     vdl = DataLoader(ChipDS(val_items, 1, seed + 1, aug=False), batch_size=batch,
                      shuffle=False, collate_fn=collate, num_workers=0)
@@ -236,11 +236,16 @@ def train(train_items, val_items, arch, epochs, batch, lr, repeat, seed, ckpt_pa
 
 
 # ----------------------------------------------------------- register + card
-def card_md(entry, n_train, train_scenes, centered, kp_err, full):
+def card_md(entry, n_train, train_scenes, held, per_scene, mean_cen, mean_f1):
     a, t, m = entry["arch"], entry["train"], entry["metrics"]
-    fs = (f"- Full-scene held-out (recall / precision / F1): **{full['recall']:.2f} / "
-          f"{full['precision']:.2f} / {full['f1']:.2f}**  ·  {full['tp']}/{full['detected']} on-label, "
-          f"{full['labelled']} labelled" if full else "- Full-scene held-out: n/a")
+    rows = []
+    for hs in held:
+        r = per_scene.get(hs, {})
+        rp = f"{r['recall']:.2f} / {r['precision']:.2f}" if "recall" in r else "— / —"
+        f1 = f"{r['f1']:.2f}" if "f1" in r else "—"
+        rows.append(f"| `{hs}` | {r.get('vehicles', '?')} | {r.get('centered_recall', '—')} | {rp} | **{f1}** |")
+    held_table = ("| held-out (untrained) scene | veh | centered | full R / P | full F1 |\n"
+                  "|---|---:|---:|---:|---:|\n" + "\n".join(rows))
     return f"""# {entry['name']}
 
 `{entry['id']}` · created {entry['created']} · weights `{entry['weights']}`
@@ -269,7 +274,8 @@ the current, understood baseline for the detector rebuild.
 - **Training:** Adam · ReduceLROnPlateau on validation loss · LR 1e-3 → 1e-5 · grad-clip 1.5 · composite
   torchvision loss · {t.get('epochs')} epochs · batch {t.get('batch')} · {t.get('device')}.
 - **Augmentation:** {t.get('aug')}.
-- **Data:** trained on {n_train} vehicles across {len(train_scenes)} scenes; held out **{m.get('heldout_scene')}**.
+- **Data:** trained on {n_train} vehicles across {len(train_scenes)} scenes; held out {len(held)} untrained
+  scene(s) for testing (below). Training scenes: {', '.join(f'`{s}`' for s in train_scenes)}.
 
 ## Deviations from Adamiak (our setup differs)
 - **Finetuned from the COCO-pretrained backbone** (`weights="DEFAULT"`), not trained from scratch — our label
@@ -278,12 +284,17 @@ the current, understood baseline for the detector rebuild.
 - **64×64 chips**, not their 512×512 images (kept our chip size; anchors may need a sweep because of it).
 - **Leave-one-scene-out** split, not random 80/10/10 (a random split leaks same-scene cues and inflates).
 
-## Results (held-out {m.get('heldout_scene')})
-- Centered-chip recall: **{centered:.3f}**  ·  keypoint error: {kp_err:.1f} px  (easy metric — recognising a
-  centered echo).
-{fs}
-- The full-scene numbers are the deployable metric and are **threshold-dependent** (evaluated at
-  thr {m.get('eval_thresh')}); threshold calibration is a separate, not-yet-built item.
+## Results — on untrained (held-out) scenes only
+
+Every number below is measured on scenes the model **never saw in training** (data-separated — no leakage).
+*Centered* recall is the easy "recognise a centered echo" metric; *full* R/P/F1 is the deployable sliding-window
+metric (threshold {m.get('eval_thresh')}, so threshold-dependent).
+
+{held_table}
+
+**Mean across held-out scenes: centered {mean_cen} · full-scene F1 {mean_f1}.** Cross-*corridor* scenes (a
+region absent from training) are the honest generalization test; same-corridor held-out scenes measure
+generalization to new traffic on a known road.
 
 ## Not built yet (deliberately, for later)
 Keypoint correction · the anchor sweep · threshold calibration · the geometry/physics filter · velocity.
@@ -293,14 +304,26 @@ See [REFINEMENT.md](../../docs/REFINEMENT.md).
 
 def main(a):
     by_scene = load_coco()
-    if a.held not in by_scene:
-        raise SystemExit(f"held-out scene {a.held!r} not found. scenes: {sorted(by_scene)}")
-    train_scenes = [s for s in sorted(by_scene) if s != a.held]
+    held = [s.strip() for s in a.held.split(",") if s.strip()]
+    bad = [s for s in held if s not in by_scene]
+    if bad:
+        raise SystemExit(f"held-out scene(s) not found: {bad}. available: {sorted(by_scene)}")
+    if a.train:
+        train_scenes = [s.strip() for s in a.train.split(",") if s.strip()]
+        bad_t = [s for s in train_scenes if s not in by_scene]
+        if bad_t:
+            raise SystemExit(f"train scene(s) not found: {bad_t}. available: {sorted(by_scene)}")
+    else:
+        train_scenes = [s for s in sorted(by_scene) if s not in held]   # everything not held out
+    leak = sorted(set(train_scenes) & set(held))
+    if leak:
+        raise SystemExit(f"LEAKAGE: scene(s) in BOTH train and held-out: {leak}")
+    if not train_scenes:
+        raise SystemExit("no training scenes selected")
     all_train = [it for s in train_scenes for it in by_scene[s]]
-    held_items = by_scene[a.held]
 
-    # carve a small random val subset for the LR scheduler ONLY (the held-out scene stays
-    # pure for the test metric — the leave-one-scene-out split is train vs. that scene).
+    # carve a small random val subset for the LR scheduler ONLY (the held-out scenes stay
+    # pure for the test metric — the split is train scenes vs. held-out scenes).
     rng = np.random.default_rng(a.seed)
     perm = rng.permutation(len(all_train))
     nval = max(8, int(0.12 * len(all_train)))
@@ -313,34 +336,45 @@ def main(a):
         "aspect_ratios": [float(x) for x in a.aspect_ratios.split(",")],
         "min_size": a.min_size, "max_size": a.max_size,
     }
-    print(f"train {len(train_items)} chips ({len(train_scenes)} scenes) + {len(val_items)} val  |  "
-          f"held-out {a.held} ({len(held_items)})", flush=True)
+    print(f"train {len(train_items)} chips / {len(train_scenes)} scenes + {len(val_items)} val  |  "
+          f"held-out {held} ({sum(len(by_scene[s]) for s in held)} veh)", flush=True)
     print(f"anchors sizes={arch['anchor_sizes']} ratios={arch['aspect_ratios']}  "
           f"epochs={a.epochs} batch={a.batch} repeat={a.repeat} lr={a.lr}", flush=True)
 
     ckpt_path = REPO / "weights" / f"{a.id}.ckpt.pt"
     (REPO / "weights").mkdir(exist_ok=True)
-    model = train(train_items, val_items, arch, a.epochs, a.batch, a.lr, a.repeat, a.seed, ckpt_path)
+    model = train(train_items, val_items, arch, a.epochs, a.batch, a.lr, a.repeat, a.seed, ckpt_path,
+                  aug_on=(a.aug != "none"))
 
-    centered, kp_err = eval_centered(model, held_items, a.thresh)
-    full = eval_full_scene(model, a.held, a.thresh)
-    print(f"\ncentered-chip recall {centered:.3f} (kp err {kp_err:.1f}px)", flush=True)
-    if full:
-        print(f"full-scene recall {full['recall']:.2f} precision {full['precision']:.2f} "
-              f"F1 {full['f1']:.2f}  ({full['tp']}/{full['detected']} on-label / {full['labelled']} labelled)",
-              flush=True)
+    # evaluate each held-out scene independently — the honest, untrained test set
+    per_scene, f1s, cens = {}, [], []
+    for hs in held:
+        c, e = eval_centered(model, by_scene[hs], a.thresh)
+        f = eval_full_scene(model, hs, a.thresh)
+        row = {"vehicles": len(by_scene[hs]), "centered_recall": round(c, 3), "kp_err_px": round(e, 2)}
+        if f:
+            row.update({"recall": round(f["recall"], 3), "precision": round(f["precision"], 3),
+                        "f1": round(f["f1"], 3), "detected": f["detected"], "labelled": f["labelled"]})
+            f1s.append(f["f1"])
+        cens.append(c)
+        per_scene[hs] = row
+        line = f"\n[{hs}]  centered {c:.3f} (kp {e:.1f}px)"
+        if f:
+            line += f"  |  full R/P/F1 {f['recall']:.2f}/{f['precision']:.2f}/{f['f1']:.2f}"
+        print(line, flush=True)
+    mean_cen = round(sum(cens) / len(cens), 3) if cens else None
+    mean_f1 = round(sum(f1s) / len(f1s), 3) if f1s else None
+    print(f"\nMEAN over {len(held)} held-out scene(s): centered {mean_cen}  full-scene F1 {mean_f1}", flush=True)
 
-    # save weights + register + card
     (REPO / "weights").mkdir(exist_ok=True)
     wpath = REPO / "weights" / f"{a.id}.pt"
     torch.save(model.state_dict(), wpath)
 
-    metrics = {"heldout_scene": a.held, "eval_thresh": a.thresh,
-               "heldout_recall_centered": round(centered, 3), "heldout_kp_err_px": round(kp_err, 2)}
-    if full:
-        metrics.update({"heldout_recall": round(full["recall"], 3),
-                        "heldout_precision": round(full["precision"], 3),
-                        "heldout_f1": round(full["f1"], 3)})
+    metrics = {"heldout_scenes": held, "eval_thresh": a.thresh, "per_scene": per_scene}
+    if mean_cen is not None:
+        metrics["heldout_recall_centered_mean"] = mean_cen
+    if mean_f1 is not None:
+        metrics["heldout_f1_mean"] = mean_f1
     entry = {
         "id": a.id, "name": a.name, "weights": f"{a.id}.pt",
         "status": "active" if a.set_active else "archived",
@@ -349,13 +383,14 @@ def main(a):
                  "anchor_sizes": arch["anchor_sizes"], "aspect_ratios": arch["aspect_ratios"],
                  "classes": 2, "keypoints": 3, "min_size": a.min_size, "max_size": a.max_size},
         "train": {"vehicles": len(train_items), "scenes": train_scenes, "epochs": a.epochs,
-                  "batch": a.batch, "lr": a.lr, "aug": "rotate+flip+brightness+perspective (Adamiak)",
+                  "batch": a.batch, "lr": a.lr,
+                  "aug": "rotate+flip+brightness+perspective (Adamiak)" if a.aug != "none" else "none",
                   "finetune": "COCO-pretrained backbone (weights=DEFAULT)",
                   "device": "cpu", "script": "src/train_detector.py"},
         "metrics": metrics,
-        "notes": a.notes or ("Fresh Adamiak-spec rebuild (finetuned backbone, 64px chips, small anchors, "
-                             "leave-one-scene-out). First pass — see the card for methodology and how it "
-                             "relates to base-default and the F1~0.50 benchmark."),
+        "notes": a.notes or (f"Adamiak-spec detector (finetuned backbone, 64px chips, small anchors). "
+                             f"Trained on {len(train_scenes)} scenes, tested on {len(held)} untrained held-out "
+                             f"scene(s): {', '.join(held)}. See the card for per-scene results."),
     }
     reg = mr.load()
     reg["models"] = [m for m in reg["models"] if m["id"] != a.id] + [entry]
@@ -365,7 +400,7 @@ def main(a):
 
     (REPO / "models" / "cards").mkdir(parents=True, exist_ok=True)
     (REPO / "models" / entry["card"]).write_text(
-        card_md(entry, len(train_items), train_scenes, centered, kp_err, full))
+        card_md(entry, len(train_items), train_scenes, held, per_scene, mean_cen, mean_f1))
 
     ckpt_path.unlink(missing_ok=True)   # training done — drop the resume checkpoint
     print(f"\nregistered '{a.id}' ({entry['status']}) -> weights/{a.id}.pt, models/{entry['card']}", flush=True)
@@ -375,11 +410,16 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--id", required=True)
     p.add_argument("--name", required=True)
-    p.add_argument("--held", default="Tacoma-Centralia_01_20260429", help="held-out scene (leave-one-scene-out)")
+    p.add_argument("--held", default="Tacoma-Centralia_01_20260429",
+                   help="comma-separated held-out (untrained) TEST scenes")
+    p.add_argument("--train", default=None,
+                   help="comma-separated TRAIN scenes (default: every scene not held out)")
     p.add_argument("--anchor-sizes", dest="anchor_sizes", default="4,8,16,32,48")
     p.add_argument("--aspect-ratios", dest="aspect_ratios", default="0.25,0.5,0.75,1.0,1.25")
     p.add_argument("--min-size", dest="min_size", type=int, default=192)
     p.add_argument("--max-size", dest="max_size", type=int, default=320)
+    p.add_argument("--aug", choices=["none", "adamiak"], default="adamiak",
+                   help="augmentation: 'adamiak' (rotate/flip/brightness/perspective) or 'none'")
     p.add_argument("--epochs", type=int, default=12)
     p.add_argument("--batch", type=int, default=4)
     p.add_argument("--lr", type=float, default=1e-3)

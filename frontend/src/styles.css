@@ -128,6 +128,18 @@ input[type=range] { accent-color: var(--accent); }
 /* train/heldout/unseen leakage guard on the inference page */
 .split-banner { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-ctl); background: var(--code-bg); }
 
+/* training tab */
+.train-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.train-grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+.train-scene { padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--r-ctl); background: var(--surface); }
+.role { height: 26px; padding: 0 12px; font-size: 12px; font-weight: 600; border-radius: var(--r-pill); border: 1px solid var(--border); background: transparent; color: var(--text-3); cursor: pointer; }
+.role:hover:not(:disabled) { color: var(--text); border-color: var(--text-3); }
+.role:disabled { opacity: .4; cursor: default; }
+.role-train { background: rgba(221,160,50,.16); color: var(--accent); border-color: rgba(221,160,50,.4); }
+.role-held { background: rgba(22,181,194,.14); color: var(--accent-2); border-color: rgba(22,181,194,.4); }
+.train-log { margin: 8px 0 0; padding: 10px 12px; background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--r-ctl); font-family: var(--font-mono); font-size: 11.5px; line-height: 1.5; color: var(--text-2); max-height: 200px; overflow: auto; white-space: pre-wrap; }
+@media (max-width: 640px) { .train-grid, .train-grid3 { grid-template-columns: 1fr; } }
+
 .content { flex: 1; overflow: auto; }
 .view { max-width: 960px; margin: 0 auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
 

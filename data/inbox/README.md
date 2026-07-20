@@ -4,6 +4,14 @@ Drop new data here, then run the importer. This is the manual stand-in for the e
 app-to-app pipeline: everything you drop is validated against the join contract and moved
 into the working set (`data/active/`), ready for training and inference.
 
+## Preferred: an exchange bundle
+
+A **bundle** (folder or `.zip`) with `manifest.json` + `imagery/*.tif` + `annotations.gpkg`, as defined in
+[`../../docs/DATA_EXCHANGE.md`](../../docs/DATA_EXCHANGE.md). The importer unpacks it, validates the manifest
+**handshake** (declared vs. actual counts, missing files, CRS) and refuses a mismatched export. This is what the
+aggregation/annotation tool should produce — the ask is in
+[`../../docs/EXPORT_REQUEST.md`](../../docs/EXPORT_REQUEST.md). Loose files (below) still work without a manifest.
+
 ## What to drop
 
 - **Raw imagery** — PlanetScope SuperDove GeoTIFFs (`<Location>_<NN>_<YYYYMMDD>.tif`), 8-band

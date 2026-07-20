@@ -28,9 +28,11 @@ Run:  python3 src/import_data.py             # import everything in data/inbox/
 """
 import argparse
 import datetime
+import json
 import shutil
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import geopandas as gpd
@@ -43,6 +45,61 @@ IMAGERY = REPO / "data" / "active" / "imagery"
 GPKG = REPO / "data" / "active" / "Annotations-RGB.gpkg"
 LAYER = "Annotations"
 EPSG = 32610
+EXCHANGE_FORMAT = "trg-echo-exchange"      # see docs/DATA_EXCHANGE.md
+
+
+def unpack_zips():
+    """Extract any .zip exchange bundles in the inbox into _unpacked/<name>/ for processing."""
+    for z in INBOX.glob("*.zip"):
+        dest = INBOX / "_unpacked" / z.stem
+        if dest.exists():
+            shutil.rmtree(dest)
+        with zipfile.ZipFile(z) as zf:
+            zf.extractall(dest)
+        print(f"unpacked {z.name} -> _unpacked/{z.stem}/")
+
+
+def check_manifests():
+    """Validate every exchange manifest.json against the files actually present (the handshake).
+    Returns True if all manifests pass (or there are none)."""
+    manifests = [p for p in INBOX.rglob("manifest.json") if "_processed" not in p.parts]
+    all_ok = True
+    for mp in manifests:
+        base = mp.parent
+        try:
+            m = json.loads(mp.read_text())
+        except Exception as e:
+            print(f"\nbundle {base.relative_to(REPO)}: unreadable manifest.json ({e})")
+            all_ok = False
+            continue
+        issues = []
+        if m.get("format") != EXCHANGE_FORMAT:
+            issues.append(f"format is {m.get('format')!r}, expected {EXCHANGE_FORMAT!r}")
+        if str(m.get("crs", "")).upper() not in ("EPSG:32610", "32610"):
+            issues.append(f"crs is {m.get('crs')!r}, expected EPSG:32610")
+        for item in m.get("imagery", []):
+            if not (base / item["file"]).exists():
+                issues.append(f"declared imagery missing: {item['file']}")
+        ann = m.get("annotations")
+        if ann:
+            af = base / ann["file"]
+            if not af.exists():
+                issues.append(f"declared annotations missing: {ann['file']}")
+            else:
+                gdf, _ = read_layer(af)
+                av = int(gdf["vehicle_id"].nunique()) if "vehicle_id" in gdf.columns else 0
+                ak = int(len(gdf))
+                if ann.get("vehicles") not in (None, av):
+                    issues.append(f"vehicle count: manifest {ann['vehicles']} vs file {av}")
+                if ann.get("keypoints") not in (None, ak):
+                    issues.append(f"keypoint count: manifest {ann['keypoints']} vs file {ak}")
+        print(f"\nbundle {base.relative_to(REPO)}  "
+              f"(format {m.get('format')} v{m.get('version')}, from {m.get('source', '?')})")
+        for i in issues:
+            print(f"  ! {i}")
+        print(f"  handshake: {'OK' if not issues else 'MISMATCH — see above'}")
+        all_ok = all_ok and not issues
+    return all_ok
 
 
 def read_layer(path):
@@ -97,15 +154,35 @@ def validate(gdf):
 
 def main(a):
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    unpack_zips()                               # extract any .zip exchange bundles first
+    manifest_ok = check_manifests()             # validate declared vs actual (the handshake)
     tifs = sorted(p for p in INBOX.rglob("*.tif") if "_processed" not in p.parts)
     gpkgs = sorted(p for p in INBOX.rglob("*.gpkg") if "_processed" not in p.parts)
     if not tifs and not gpkgs:
-        print(f"inbox empty. Drop .tif imagery and/or .gpkg annotation sets into "
+        print(f"\ninbox empty. Drop an exchange bundle (folder or .zip) or loose .tif/.gpkg into "
               f"{INBOX.relative_to(REPO)}/ and re-run. See {INBOX.relative_to(REPO)}/README.md.")
         return
-    print(f"inbox: {len(tifs)} imagery file(s), {len(gpkgs)} annotation set(s)")
+    if not manifest_ok and not a.dry_run:
+        print("\n! a bundle manifest handshake FAILED (above) — not ingesting. Fix the export and re-run, "
+              "or use --dry-run to inspect. Nothing changed.")
+        return
+    print(f"\ninbox: {len(tifs)} imagery file(s), {len(gpkgs)} annotation set(s)")
 
     inbox_scenes = {p.stem: p for p in tifs}
+
+    # --- imagery CRS gate: exclude scenes not in EPSG:32610 (never reproject a raster;
+    #     the point->pixel join assumes 32610, so a wrong-zone scene must not be ingested) ---
+    bad_crs = {}
+    for stem, p in list(inbox_scenes.items()):
+        with rasterio.open(p) as src:
+            epsg = src.crs.to_epsg() if src.crs else None
+        if epsg != EPSG:
+            bad_crs[stem] = epsg
+            del inbox_scenes[stem]
+    for stem, epsg in bad_crs.items():
+        print(f"\n  ! EXCLUDED {stem}: imagery CRS EPSG:{epsg} != {EPSG}. The join assumes {EPSG}; ingesting "
+              f"it would produce wrong chips. Its imagery + annotations are skipped — re-export in EPSG:32610.")
+
     existing = {p.stem for p in IMAGERY.glob("*.tif")}
     available = set(inbox_scenes) | existing
 
@@ -121,21 +198,15 @@ def main(a):
             print("  ! no valid annotations — skipping this set")
             continue
         orphans = sorted(s for s in clean["scene"].unique() if s not in available)
+        for s in orphans:
+            why = f"imagery CRS != {EPSG} (excluded above)" if s in bad_crs else "no matching GeoTIFF (fix the name / drop the .tif)"
+            print(f"  ! scene {s}: {why} — its annotations are dropped")
         if orphans:
-            print(f"  ! scenes with NO matching GeoTIFF (drop the .tif too, or fix the name): {orphans}")
             clean = clean[~clean["scene"].isin(orphans)]
         for s in sorted(clean["scene"].unique()):
             print(f"  scene {s}: {clean[clean['scene'] == s]['vehicle_id'].nunique()} vehicles")
         if len(clean):
             valid_sets.append(clean)
-
-    # --- imagery CRS sanity (warn only; never reproject a raster) ---
-    for stem, p in inbox_scenes.items():
-        with rasterio.open(p) as src:
-            epsg = src.crs.to_epsg() if src.crs else None
-        if epsg != EPSG:
-            print(f"\n  ! imagery {stem}: CRS EPSG:{epsg} != {EPSG} — the pipeline assumes {EPSG}; "
-                  "the point->pixel join will be wrong. Re-export this scene in EPSG:32610.")
 
     if a.dry_run:
         print("\n[dry-run] validated only — nothing changed.")
@@ -192,6 +263,16 @@ def main(a):
         for gp in gpkgs:
             if gp.exists():
                 shutil.move(str(gp), str(pdir / gp.name))
+
+    # --- file processed bundles (zip + unpacked) for provenance / clear the inbox ---
+    zips = list(INBOX.glob("*.zip"))
+    if zips:
+        pdir = INBOX / "_processed" / stamp
+        pdir.mkdir(parents=True, exist_ok=True)
+        for z in zips:
+            shutil.move(str(z), str(pdir / z.name))
+    if (INBOX / "_unpacked").exists():
+        shutil.rmtree(INBOX / "_unpacked")
 
     # --- regenerate chips (only if labels changed) ---
     if valid_sets and not a.no_export:

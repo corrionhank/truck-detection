@@ -102,6 +102,11 @@ is backed up to `data/active/_backups/` first), regenerates the COCO chips, and 
 `train_detector.py --held <scene>` trains on the updated set. Full instructions:
 [`../data/inbox/README.md`](../data/inbox/README.md).
 
+The preferred input is a validated **exchange bundle** (`manifest.json` + `imagery/` + `annotations.gpkg`) — the
+format the aggregation/annotation tool produces. The contract is [DATA_EXCHANGE.md](DATA_EXCHANGE.md), the ask to
+that tool is [EXPORT_REQUEST.md](EXPORT_REQUEST.md), and `src/export_bundle.py` emits a reference bundle from the
+current data (executable spec + round-trip test).
+
 ## 6. Current corpus (snapshot)
 
 **339 vehicles / 1,017 keypoints across 8 labeled scenes** (up ~21× from an initial 16). Format-validated:

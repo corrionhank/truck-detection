@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Truck, Play, Database, BarChart3, Layers, ScanLine, FileText, Loader2 } from 'lucide-react'
+import { Truck, Play, Database, BarChart3, Layers, ScanLine, FileText, Loader2, Cpu } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import annotationsSpec from './docs/annotations-spec.md?raw'
@@ -7,7 +7,7 @@ import annotationsSpec from './docs/annotations-spec.md?raw'
 // Sibling app (Satellite Data Tooling Hub) — the reciprocal nav target.
 const HUB_URL = 'http://localhost:5000/'
 
-type Tab = 'dataset' | 'results' | 'models' | 'inference' | 'spec'
+type Tab = 'dataset' | 'results' | 'models' | 'training' | 'inference' | 'spec'
 
 type ModelEntry = {
   id: string
@@ -17,7 +17,7 @@ type ModelEntry = {
   created: string
   arch: { backbone?: string; anchors: string; classes?: number; keypoints?: number }
   train: { vehicles?: number; scenes?: string[]; epochs?: number; aug?: string; device?: string; script?: string }
-  metrics: Record<string, string | number | null>
+  metrics: Record<string, string | number | null | string[] | Record<string, unknown>>
   notes: string
   card?: string
 }
@@ -51,7 +51,8 @@ type DetectResult = {
 function evalSplit(m: ModelEntry | undefined, scene: string): Split {
   if (!m || !scene) return 'unseen'
   if ((m.train?.scenes || []).includes(scene)) return 'train'
-  if (m.metrics?.heldout_scene === scene) return 'heldout'
+  const held = (m.metrics?.heldout_scenes as string[] | undefined) || []
+  if (held.includes(scene) || m.metrics?.heldout_scene === scene) return 'heldout'
   return 'unseen'
 }
 const SPLIT: Record<Split, { label: string; cls: string; mark: string; note: string }> = {
@@ -99,7 +100,7 @@ export default function App() {
             PlanetScope SuperDove imagery — the model half of the project.
           </p>
 
-          <div className="segmented" style={{ maxWidth: 560 }}>
+          <div className="segmented" style={{ maxWidth: 660 }}>
             <button className={tab === 'dataset' ? 'active' : ''} onClick={() => setTab('dataset')}>
               <Database size={14} /> Dataset
             </button>
@@ -108,6 +109,9 @@ export default function App() {
             </button>
             <button className={tab === 'models' ? 'active' : ''} onClick={() => setTab('models')}>
               <Layers size={14} /> Models
+            </button>
+            <button className={tab === 'training' ? 'active' : ''} onClick={() => setTab('training')}>
+              <Cpu size={14} /> Training
             </button>
             <button className={tab === 'inference' ? 'active' : ''} onClick={() => setTab('inference')}>
               <ScanLine size={14} /> Inference
@@ -120,6 +124,7 @@ export default function App() {
           {tab === 'dataset' && <DatasetView totalScenes={scenes.length} />}
           {tab === 'results' && <ResultsView />}
           {tab === 'models' && <ModelsView registry={registry} refresh={refreshModels} onRun={() => setTab('inference')} />}
+          {tab === 'training' && <TrainingView scenes={scenes} refresh={refreshModels} />}
           {tab === 'inference' && <InferenceView scenes={scenes} registry={registry} />}
           {tab === 'spec' && <SpecView />}
         </div>
@@ -279,7 +284,7 @@ function ModelsView({ registry, refresh, onRun }: { registry: Registry | null; r
       <div className="list">
         {sorted.map((m) => {
           const isActive = m.id === registry.active
-          const nums = Object.entries(m.metrics || {}).filter(([, v]) => typeof v === 'number')
+          const nums = Object.entries(m.metrics || {}).filter((e): e is [string, number] => typeof e[1] === 'number')
           return (
             <div key={m.id} className={`card model${isActive ? ' model-active' : ''}`}>
               <div className="row-between">
@@ -384,6 +389,136 @@ function SpecView() {
   return (
     <div className="card">
       <Markdown>{annotationsSpec}</Markdown>
+    </div>
+  )
+}
+
+type Role = 'train' | 'held' | 'off'
+type Job = { state: string; progress?: { epoch: number; total: number } | null; log_tail?: string }
+
+function TrainingView({ scenes, refresh }: { scenes: Scene[]; refresh: () => void }) {
+  const [id, setId] = useState('')
+  const [name, setName] = useState('')
+  const [anchors, setAnchors] = useState('adamiak')
+  const [aug, setAug] = useState('adamiak')
+  const [epochs, setEpochs] = useState(12)
+  const [lr, setLr] = useState(0.001)
+  const [roles, setRoles] = useState<Record<string, Role>>({})
+  const [job, setJob] = useState<Job | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [starting, setStarting] = useState(false)
+
+  useEffect(() => {
+    if (scenes.length && Object.keys(roles).length === 0) {
+      const r: Record<string, Role> = {}
+      scenes.forEach((s) => { r[s.name] = s.vehicles ? 'train' : 'off' })   // unlabeled default to skip
+      setRoles(r)
+    }
+  }, [scenes, roles])
+
+  const setRole = (scene: string, role: Role) =>
+    setRoles((p) => ({ ...p, [scene]: p[scene] === role ? 'off' : role }))
+  const trainScenes = Object.entries(roles).filter(([, r]) => r === 'train').map(([s]) => s)
+  const heldScenes = Object.entries(roles).filter(([, r]) => r === 'held').map(([s]) => s)
+  const running = !!job && (job.state === 'running' || job.state === 'stopped')
+
+  useEffect(() => {
+    if (!job || job.state === 'done' || job.state === 'failed' || job.state === 'none') return
+    const t = setInterval(async () => {
+      try {
+        const d: Job = await (await fetch(`/api/train/status?id=${encodeURIComponent(id)}`)).json()
+        setJob(d)
+        if (d.state === 'done') refresh()
+      } catch { /* keep polling */ }
+    }, 4000)
+    return () => clearInterval(t)
+  }, [job, id, refresh])
+
+  const start = async () => {
+    setError(null); setStarting(true)
+    try {
+      const r = await fetch('/api/train', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, name, train_scenes: trainScenes, held_scenes: heldScenes, anchors, aug, epochs, lr }),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || r.statusText)
+      setJob({ state: 'running' })
+    } catch (e) { setError(String(e instanceof Error ? e.message : e)) }
+    finally { setStarting(false) }
+  }
+
+  const nSkip = scenes.length - trainScenes.length - heldScenes.length
+  return (
+    <div className="card" style={{ maxWidth: 900 }}>
+      <div className="section-label">Train a model</div>
+      <p className="hint" style={{ margin: 0 }}>
+        Configure a run and start it — it trains in the background (CPU; tens of minutes) and registers to the
+        Models tab when done. <b>Held-out scenes are your untrained test set</b> — never trained on, so their
+        metrics are an honest generalization read.
+      </p>
+
+      <div className="train-grid">
+        <div><label className="field-label">Model id</label>
+          <input type="text" value={id} onChange={(e) => setId(e.target.value)} placeholder="kprcnn-v3" disabled={running} /></div>
+        <div><label className="field-label">Name</label>
+          <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Keypoint R-CNN v3" disabled={running} /></div>
+      </div>
+
+      <label className="field-label">Anchors (model philosophy)</label>
+      <select value={anchors} onChange={(e) => setAnchors(e.target.value)} disabled={running}>
+        <option value="adamiak">Adamiak small — 4/8/16/32/48 × 0.25–1.25</option>
+        <option value="small">small — 8–128 × 0.5/1/2</option>
+        <option value="default">default — 32–512 × 0.5/1/2</option>
+      </select>
+
+      <div className="train-grid3">
+        <div><label className="field-label">Augmentation</label>
+          <select value={aug} onChange={(e) => setAug(e.target.value)} disabled={running}>
+            <option value="adamiak">Adamiak (rotate/flip/bright/persp)</option>
+            <option value="none">none</option>
+          </select></div>
+        <div><label className="field-label">Epochs</label>
+          <input type="number" value={epochs} onChange={(e) => setEpochs(+e.target.value)} disabled={running} /></div>
+        <div><label className="field-label">Learning rate</label>
+          <input type="number" step={0.0001} value={lr} onChange={(e) => setLr(+e.target.value)} disabled={running} /></div>
+      </div>
+
+      <label className="field-label">Data — pick train vs held-out (test) per scene</label>
+      <div className="list" style={{ gap: 6 }}>
+        {scenes.map((s) => (
+          <div key={s.name} className="row-between train-scene">
+            <span className="mono" style={{ fontSize: 13 }}>{s.name}{' '}
+              <span className="hint">{s.vehicles ? `${s.vehicles} veh` : 'unlabeled'}</span></span>
+            <span style={{ display: 'flex', gap: 6 }}>
+              <button className={`role ${roles[s.name] === 'train' ? 'role-train' : ''}`}
+                onClick={() => setRole(s.name, 'train')} disabled={running}>train</button>
+              <button className={`role ${roles[s.name] === 'held' ? 'role-held' : ''}`}
+                onClick={() => setRole(s.name, 'held')} disabled={running || !s.vehicles}
+                title={!s.vehicles ? 'no labels to score against' : 'held-out test scene'}>test</button>
+            </span>
+          </div>
+        ))}
+      </div>
+      <p className="hint" style={{ margin: '2px 0' }}>{trainScenes.length} train · {heldScenes.length} held-out · {nSkip} skipped</p>
+
+      {error && <div className="statusline err" style={{ marginTop: 8 }}><code>[err]</code> {error}</div>}
+      <button className="primary wide" style={{ marginTop: 12 }} onClick={start}
+        disabled={starting || running || !id || !name || !trainScenes.length || !heldScenes.length}>
+        {running ? <Loader2 size={14} className="spin" /> : <Cpu size={14} />}
+        {running ? ' Training…' : ' Start training'}
+      </button>
+
+      {job && job.state !== 'none' && (
+        <div style={{ marginTop: 12 }}>
+          <div className="row-between">
+            <span className={`badge-state ${job.state === 'done' ? 's-success' : job.state === 'failed' ? 's-failed' : 's-running'}`}>{job.state}</span>
+            {job.progress && <span className="hint">epoch {job.progress.epoch}/{job.progress.total}</span>}
+            {job.state === 'done' && <span className="chip-model">registered → Models tab</span>}
+          </div>
+          {job.log_tail && <pre className="train-log">{job.log_tail}</pre>}
+        </div>
+      )}
     </div>
   )
 }
