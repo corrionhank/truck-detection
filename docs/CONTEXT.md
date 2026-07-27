@@ -85,4 +85,4 @@ per-scene metadata:
   (used Ortho-Analytic 3B, not raw). Van Etten 2024 — PlanetScope vehicle segmentation + counts.
 - **Origin tool:** `wsu-trg-satellite-freight-feasibility` (local parent repo — AOI building, Planet ordering,
   viewing) — also holds the per-scene metadata sidecars.
-- **Stakeholders:** WSU TRG — Jake Wagner, Eric Jessup.
+- **Stakeholders:** WSU Transportation Research Group (TRG).

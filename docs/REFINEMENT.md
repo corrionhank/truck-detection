@@ -1,5 +1,12 @@
 # Refining the model — a prioritized playbook
 
+> **Status (2026-07-26): partly superseded — historical playbook.** The live plan is
+> [NEXT_MODEL_PLAN.md](NEXT_MODEL_PLAN.md) and the current state is [PROJECT_STATE.md](PROJECT_STATE.md). Two
+> corrections since this was written: (1) Tier 2.5 "train the production model on all scenes = biggest win"
+> **backfired** — done as `adamiak-all`, it produced a broken model (val overlapped train → LR never annealed);
+> always hold a scene out. (2) Dataset numbers here (339 / 8 scenes) are stale — it's now **629 / 19**. The tier
+> structure below still reads as the reference menu of levers.
+
 The open items for the **training rebuild**, ordered by return-on-effort. Grounded in this project's findings
 ([CHANGELOG.md](../CHANGELOG.md)) and the two reference papers (Adamiak 2025, Van Etten 2024). The training
 scripts these build on are archived (`archive/src/`) — but the model registry, weights, and inference are

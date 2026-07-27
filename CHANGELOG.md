@@ -5,6 +5,39 @@ Running log of what changed and what we learned. Newest first. For the current d
 
 ---
 
+## 2026-07-26 — Trained `jitter-mv` (translation jitter + multi-vehicle chips) + model comparison
+
+- **New refinements built:** padded-chip **translation jitter** (`export_coco.py --margin`; 96 px chips
+  random-cropped to 64 px each epoch, legal offset derived from the keypoints so it never cuts them) and
+  **multi-vehicle chip targets** (a neighbour echo in the window is now a labelled positive, not
+  trained-as-background — 404 neighbour annotations). New tools: `src/neighbor_diagnostic.py`,
+  `src/verify_labels.py` (label-on-echo overlay).
+- **Spatial-overlap guard** in `train_detector.py` (warns + labels held scenes *temporal* vs *spatial*; the
+  name-based split can't see it) + `--exclude` (drop scenes from training without holding them out) + `--jitter`.
+- **Trained `kprcnn-jitter-mv`** — 466 veh / 14 scenes, lr 1e-4 (after the fresh heads spiked at 1e-3), 4 held-out
+  scenes. Result: **recall-rich, precision-poorer** — TC_01 F1 0.49 vs `adamiak-v2` 0.54 (thr 0.3). But precision
+  is a lower bound (partial labels — most "false positives" are real unlabeled / small-vehicle echoes), and the LR
+  drop is a confound, so `adamiak-v2` stays the best *validated* model while jitter-mv's recall gain is likely
+  real. Full write-up: [docs/MODEL_COMPARISON.md](docs/MODEL_COMPARISON.md).
+- **Confidence ≈ quality filter:** labels only mark clear/well-formed echoes, so the score ranks by echo quality;
+  raising the threshold roughly separates trucks from cars/noise. The clean version is a non-DL echo-size /
+  geometry gate — the next lever to build.
+
+## 2026-07-26 — Data → 629/19, spatial-overlap finding, docs consolidated
+
+- **Imported the `trg-echo-exchange` bundle → 629 vehicles / 19 scenes** (was 538/16; +Yakima-Toppenish_04,
+  blaine-bellingham_03, polygon_01; existing 16 replaced with upstream-corrected labels). gpkg committed.
+- **Ran a leakage-free eval matrix** (`eval_matrix.py`): failure splits by corridor and the axis is background
+  **clutter**, not terrain. Active `adamiak-all` is a **broken run** (0.06 on its own trained scenes — trained on
+  all scenes with no held-out, so the LR scheduler never annealed).
+- **Finding: every multi-scene corridor is the same footprint re-captured on different dates** (measured on valid
+  footprint, not bounds). Name-based leave-one-scene-out never produced spatial hold-outs → distinguish *temporal*
+  (later captures of a known corridor) from *spatial* (new corridor) generalization; a spatial-overlap guard is
+  needed.
+- **Docs consolidated:** the session's working docs merged into [docs/PROJECT_STATE.md](docs/PROJECT_STATE.md);
+  the active plan is [docs/NEXT_MODEL_PLAN.md](docs/NEXT_MODEL_PLAN.md); superseded drafts moved to `docs/archive/`.
+- New tools: `src/verify_labels.py` (label-on-echo overlay check), `eval_matrix.py` (model×scene matrix).
+
 ## 2026-07-15 — Narrow the archive to *training only* (console + inference restored)
 
 The prior teardown over-reached: it archived the whole modeling stack, including the console pages and the

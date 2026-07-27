@@ -75,17 +75,37 @@ def load_vehicles():
     return kept, dropped
 
 
-def main(chip):
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    img_dir = OUT_DIR / "images"
+def _annotation(px, x0, y0, export, ann_id, img_id, vid, is_center):
+    """One COCO keypoint annotation for a vehicle, in export-window pixel space."""
+    kp = []
+    for c, ro in px:
+        kp += [round(c - x0, 2), round(ro - y0, 2), 2]         # v=2 = labelled + visible
+    kxs = kp[0::3]; kys = kp[1::3]
+    pad = 3
+    bx0 = max(0.0, min(kxs) - pad); by0 = max(0.0, min(kys) - pad)
+    bx1 = min(float(export), max(kxs) + pad); by1 = min(float(export), max(kys) + pad)
+    bw, bh = bx1 - bx0, by1 - by0
+    return {
+        "id": ann_id, "image_id": img_id, "category_id": 1,
+        "keypoints": kp, "num_keypoints": 3,
+        "bbox": [round(bx0, 2), round(by0, 2), round(bw, 2), round(bh, 2)],
+        "area": round(bw * bh, 2), "iscrowd": 0,
+        "vehicle_id": vid, "center": is_center,
+    }
+
+
+def main(chip, margin, out_dir, single):
+    export = chip + 2 * margin          # exported image size; the model still crops `chip` from it at train time
+    half_exp = export // 2
+    out_dir.mkdir(parents=True, exist_ok=True)
+    img_dir = out_dir / "images"
     img_dir.mkdir(exist_ok=True)
-    half = chip // 2
 
     by_scene, dropped = load_vehicles()
 
     images, annotations = [], []
     img_id = ann_id = 0
-    n_vehicles = 0
+    n_vehicles = n_neighbors = 0
 
     for scene in sorted(by_scene):
         tif = GEOTIFF_DIR / f"{scene}.tif"
@@ -101,49 +121,48 @@ def main(chip):
             W, H = src.width, src.height
             inv = ~src.transform
 
-            for vid, pts in sorted(by_scene[scene].items()):
-                # pixel coords per keypoint, in blue/red/green order
-                px = [(inv * (x, y)) for _, x, y in pts]  # (col,row) floats
+            # pixel keypoints per vehicle (blue/red/green order) — reused for the neighbour lookup
+            veh_px = {vid: [(inv * (x, y)) for _, x, y in pts]
+                      for vid, pts in by_scene[scene].items()}
+
+            for vid in sorted(by_scene[scene]):
+                px = veh_px[vid]
                 cols = [c for c, _ in px]; rows = [ro for _, ro in px]
                 cx, cy = float(np.mean(cols)), float(np.mean(rows))
 
-                # chip window clamped inside the scene
-                x0 = int(round(cx)) - half
-                y0 = int(round(cy)) - half
-                x0 = max(0, min(x0, W - chip))
-                y0 = max(0, min(y0, H - chip))
-                crop = rgb[y0:y0 + chip, x0:x0 + chip]
-                if crop.shape[:2] != (chip, chip):
-                    continue  # scene smaller than a chip (shouldn't happen)
-
-                # keypoints relative to chip origin; v=2 means labelled+visible
-                kp = []
-                for c, ro in px:
-                    kp += [round(c - x0, 2), round(ro - y0, 2), 2]
-                kxs = kp[0::3]; kys = kp[1::3]
-                pad = 3
-                bx0 = max(0.0, min(kxs) - pad); by0 = max(0.0, min(kys) - pad)
-                bx1 = min(float(chip), max(kxs) + pad); by1 = min(float(chip), max(kys) + pad)
-                bw, bh = bx1 - bx0, by1 - by0
+                # export window (size `export`), centered on the vehicle, clamped inside the scene
+                x0 = int(round(cx)) - half_exp
+                y0 = int(round(cy)) - half_exp
+                x0 = max(0, min(x0, W - export))
+                y0 = max(0, min(y0, H - export))
+                crop = rgb[y0:y0 + export, x0:x0 + export]
+                if crop.shape[:2] != (export, export):
+                    continue  # scene smaller than the export window (shouldn't happen)
 
                 fname = f"{scene}__v{vid}.png"
                 Image.fromarray(crop).save(img_dir / fname)
                 img_id += 1
                 images.append({"id": img_id, "file_name": fname,
-                               "width": chip, "height": chip, "scene": scene})
-                ann_id += 1
-                annotations.append({
-                    "id": ann_id, "image_id": img_id, "category_id": 1,
-                    "keypoints": kp, "num_keypoints": 3,
-                    "bbox": [round(bx0, 2), round(by0, 2), round(bw, 2), round(bh, 2)],
-                    "area": round(bw * bh, 2), "iscrowd": 0,
-                    "vehicle_id": vid,
-                })
+                               "width": export, "height": export,
+                               "chip_px": chip, "margin_px": margin, "scene": scene})
+
+                # center vehicle first; unless --single, also every OTHER vehicle fully inside the
+                # window, so a neighbour's echo is a labelled positive rather than trained-as-background.
+                members = [vid]
+                if not single:
+                    for w in sorted(by_scene[scene]):
+                        if w != vid and all(x0 <= c < x0 + export and y0 <= ro < y0 + export
+                                            for c, ro in veh_px[w]):
+                            members.append(w)
+                for w in members:
+                    ann_id += 1
+                    annotations.append(_annotation(veh_px[w], x0, y0, export, ann_id, img_id, w, w == vid))
                 n_vehicles += 1
+                n_neighbors += len(members) - 1
 
     coco = {
         "info": {"description": "SuperDove moving-echo keypoints (blue->red->green)",
-                 "chip_px": chip, "gsd_m": 3.0},
+                 "chip_px": chip, "margin_px": margin, "export_px": export, "gsd_m": 3.0},
         "images": images,
         "annotations": annotations,
         "categories": [{
@@ -152,16 +171,25 @@ def main(chip):
             "skeleton": [[1, 2], [2, 3]],
         }],
     }
-    out = OUT_DIR / "annotations.json"
+    out = out_dir / "annotations.json"
     out.write_text(json.dumps(coco, indent=2))
 
+    mode = "single-vehicle" if single else f"multi-vehicle (+{n_neighbors} neighbour annotations)"
     print(f"scenes with labels : {len(by_scene)}")
-    print(f"vehicles exported  : {n_vehicles}  (incomplete dropped: {dropped})")
-    print(f"chips              : {img_dir.relative_to(REPO)}/  ({chip}x{chip} px)")
-    print(f"coco               : {out.relative_to(REPO)}")
+    print(f"chips (1/vehicle)  : {n_vehicles}  (incomplete dropped: {dropped})")
+    print(f"export             : {export}x{export} px (chip {chip} + 2*margin {margin}) · {mode}")
+    print(f"chips dir          : {img_dir}")
+    print(f"coco               : {out}")
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--chip", type=int, default=64, help="chip size in pixels")
-    main(ap.parse_args().chip)
+    ap.add_argument("--chip", type=int, default=64, help="model chip size (cropped from the export at train time)")
+    ap.add_argument("--margin", type=int, default=16,
+                    help="padding each side; export = chip + 2*margin (for train-time jitter). "
+                         "--margin 0 --single reproduces the legacy 64px single-vehicle output byte-for-byte")
+    ap.add_argument("--out", default=None, help="output dir (default data/active/coco)")
+    ap.add_argument("--single", action="store_true",
+                    help="one annotation per chip (legacy); default emits multi-vehicle targets")
+    a = ap.parse_args()
+    main(a.chip, a.margin, Path(a.out) if a.out else OUT_DIR, a.single)

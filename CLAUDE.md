@@ -27,12 +27,13 @@ predicting 3 keypoints (blue/red/green) for 1 class, following Adamiak et al. 20
 
 | Path | What |
 |---|---|
-| `src/` | **active** pipeline: `import_data.py` (ingest dropped data / exchange bundles), `export_bundle.py` (reference exchange-bundle exporter), `export_coco.py` (labels + GeoTIFFs → COCO + 64×64 chips), `train_detector.py` (train + register a model), `detect_scene.py` (full-scene inference), `model_registry.py` (build/load any registered model), `inspect_scene.py`, `make_road_mask.py` |
+| `src/` | **active** pipeline: `import_data.py` (ingest training bundles → labels+imagery), `import_scenes.py` (imagery-only, for inference; any CRS), `export_bundle.py` (reference exchange-bundle exporter), `export_coco.py` (labels + GeoTIFFs → COCO + 64×64 chips), `train_detector.py` (train + register a model), `detect_scene.py` (full-scene inference), `model_registry.py` (build/load any registered model), `inspect_scene.py`, `make_road_mask.py` |
 | `backend/server.py` | Flask API (port **8787**): `/api/dataset`, `/api/scenes`, `/api/models*`, `/api/detect` |
 | `frontend/` | React + Vite console (port **5173**): Dataset / Results / Models / Inference / Spec |
 | `models/` | the experiment log: `registry.json` (every trained model + metrics + notes) + methodology `cards/` |
 | `weights/` | trained weights (`*.pt`) — **gitignored** (226 MB each), referenced by the registry |
-| `data/inbox/` | **drop zone** for new imagery + annotation sets (gitignored) → `import_data.py` ingests it |
+| `data/inbox/` | **drop zone** for training bundles (imagery + annotations) → `import_data.py` |
+| `data/inbox-scenes/` | **drop zone** for inference-only imagery (any CRS) → `import_scenes.py` |
 | `data/active/` | hot set: `Annotations-RGB.gpkg` (labels, **the only data file in git**) + `imagery/` + `coco/` |
 | `data/cold/` | archived unlabeled scenes + old QGIS project — gitignored |
 | **`archive/src/`** | **retired training scripts** (`train_model`, `crossval_keypoint`, `train_keypoint_rcnn*`, `viz_heldout`, `infer_keypoints`) — rebuilding |
@@ -97,5 +98,7 @@ Playbook: [`docs/REFINEMENT.md`](docs/REFINEMENT.md). Reference method: [`docs/M
 
 ## Doc index
 
-Start: this file → [README.md](README.md) → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (how the system fits
-together, and what's archived). Then the [README docs table](README.md#docs).
+Start: this file → **[docs/PROJECT_STATE.md](docs/PROJECT_STATE.md)** (where things stand: data, models, the
+diagnosis, pipeline state, landmines) → **[docs/NEXT_MODEL_PLAN.md](docs/NEXT_MODEL_PLAN.md)** (the active
+pre-training fixes). Background: [README.md](README.md) → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Reference
+docs in the [README docs table](README.md#docs); superseded drafts in `docs/archive/`.

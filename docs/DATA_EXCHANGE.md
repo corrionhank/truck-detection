@@ -78,6 +78,23 @@ A vehicle = exactly 3 points (sequences 1,2,3); incomplete vehicles are dropped 
 4. **Merge is replace-by-scene** on import: a bundle is authoritative for the scenes it covers; the active gpkg
    is backed up first, so nothing is ever lost.
 
+## Inference bundle (imagery only — a lighter variant)
+
+For running trained models on **new ground without labeling it**, there's a lighter export: imagery + a minimal
+manifest, **no annotations**.
+
+- **Layout:** `manifest.json` + `imagery/<scene>.tif` — no `annotations.gpkg`.
+- **Manifest:** add `"purpose": "inference"`, keep the `imagery` list, and **omit the `annotations` block**.
+- **CRS: any UTM zone is fine** (not just 32610). Inference doesn't join labels to pixels, so scenes stay in
+  their **native zone** — no reprojection (which would smear the signal and is unnecessary here).
+- **Consumed by `src/import_scenes.py`** (dropped into `data/inbox-scenes/`), which moves the imagery into
+  `data/active/imagery/` for the Inference tab and **never touches the training set**. Imported scenes read
+  "UNSEEN" for every model.
+
+So there are two exports on the same base format: the **training bundle** (imagery + annotations, EPSG:32610 →
+`import_data.py`) and the **inference bundle** (imagery only, any CRS → `import_scenes.py`). The full request to
+the hub is in [EXPORT_REQUEST.md](EXPORT_REQUEST.md).
+
 ## Producing a bundle (the hub side)
 
 Implement the layout + `manifest.json` above. For a **reference implementation / golden fixture** to match,

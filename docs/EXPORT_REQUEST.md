@@ -109,6 +109,44 @@ we'll add an alias. Either way, **send us your actual filenames before the first
    `python3 src/import_data.py --dry-run` — it must print **`handshake: OK`** and resolve every scene. Then we
    scale up.
 
+## NEW ASK — an inference-only imagery export (lighter than the training bundle)
+
+Separate from the full training bundle above, we want a **second, lighter export**: just clipped GeoTIFFs, **no
+annotation step**, for running already-trained models on new ground (new corridors, new dates) *before or
+without* labeling them. This unblocks "does the model find echoes here?" without waiting on annotation.
+
+**What we need — an inference bundle:**
+
+```
+<bundle>/                       # folder or .zip
+  manifest.json                 # "purpose": "inference", imagery list, and NO annotations block
+  imagery/<scene>.tif           # the clipped 8-band SuperDove SR GeoTIFFs
+```
+
+`manifest.json`:
+```json
+{
+  "format": "trg-echo-exchange", "version": 1, "purpose": "inference",
+  "created": "2026-07-24T…Z", "source": "satellite-data-tooling-hub",
+  "imagery": [{ "scene": "Seattle_02_20260701", "file": "imagery/Seattle_02_20260701.tif" }]
+}
+```
+
+**How it's easier than the training export:**
+- **No annotation layer** — no labeling, no GeoPackage, no `vehicles`/`keypoints` counts.
+- **CRS doesn't have to be EPSG:32610** — inference doesn't join labels to pixels, so **keep each scene in its
+  native UTM zone** (e.g. eastern-WA scenes in 32611). *Don't* reproject to zone 10 — resampling would smear the
+  moving-echo signal, and it's unnecessary here.
+- Same **8-band SuperDove Surface-Reflectance** product, same `<Location>_<NN>_<YYYYMMDD>.tif` naming (still the
+  join key / scene id).
+
+**On our side** this is consumed by `src/import_scenes.py` (dropped into `data/inbox-scenes/`), which moves the
+imagery straight into the model's scene list and never touches the training set. So the two exports are:
+- **training bundle** (imagery + annotations, EPSG:32610) → `data/inbox/` → `import_data.py`,
+- **inference bundle** (imagery only, any CRS) → `data/inbox-scenes/` → `import_scenes.py`.
+
+A `"purpose": "inference"` field (or simply the absence of an `annotations` block) tells us which one it is.
+
 ## Forward-looking (nice-to-have, for velocity)
 
 Not needed to train the detector, but needed to turn pixel displacement into speed — cheap to include while you

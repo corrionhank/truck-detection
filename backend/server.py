@@ -17,6 +17,7 @@ The Vite dev server proxies /api and /outputs here (see vite.config.ts).
 """
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -37,12 +38,15 @@ OUTPUTS = REPO / "outputs"
 # in-flight training jobs (id -> Popen); logs persist to weights/<id>.train.log
 _train_jobs = {}
 ANCHOR_PRESETS = {
-    "small":   ("8,16,32,64,128", "0.5,1.0,2.0"),
-    "default": ("32,64,128,256,512", "0.5,1.0,2.0"),
-    "adamiak": ("4,8,16,32,48", "0.25,0.5,0.75,1.0,1.25"),
+    "adamiak": ("4,8,16,32,48", "0.25,0.5,0.75,1.0,1.25"),      # paper's swept winner (tiny echoes)
+    "tiny":    ("2,4,8,16,32", "0.25,0.5,1.0,2.0"),             # even smaller, for the faintest streaks
+    "streak":  ("4,8,16,32,48", "0.2,0.35,0.5,0.75,1.0"),       # elongated ratios for diagonal streaks
+    "small":   ("8,16,32,64,128", "0.5,1.0,2.0"),               # moderate
+    "default": ("32,64,128,256,512", "0.5,1.0,2.0"),            # torchvision default (too big for echoes)
 }
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024 * 1024   # 2 GB — allow batches of GeoTIFF uploads
 
 # Preload the active model so the first detection isn't slow; others load on demand.
 try:
@@ -88,6 +92,24 @@ def api_dataset():
 @app.get("/api/scenes")
 def api_scenes():
     return jsonify({"scenes": all_scenes()})
+
+
+@app.post("/api/scenes/remove")
+def api_scene_remove():
+    """Remove a scene's imagery from the loaded set — moved to data/cold/removed-scenes/ (recoverable),
+    not deleted. Annotations (if any) are left in the gpkg. Reports whether it was a labeled scene."""
+    name = (request.get_json(force=True, silent=True) or {}).get("name", "")
+    tif = GEOTIFF_DIR / f"{name}.tif"
+    if not tif.exists():
+        return jsonify({"error": f"no scene {name!r}"}), 404
+    labeled = name in dataset_stats()["per_scene"]
+    cold = REPO / "data" / "cold" / "removed-scenes"
+    cold.mkdir(parents=True, exist_ok=True)
+    dest = cold / tif.name
+    if dest.exists():
+        dest.unlink()
+    shutil.move(str(tif), str(dest))
+    return jsonify({"removed": name, "was_labeled": labeled, "restored_to": "data/cold/removed-scenes/"})
 
 
 @app.get("/api/models")
@@ -221,6 +243,46 @@ def api_train_status():
     prog = {"epoch": int(m[-1][0]), "total": int(m[-1][1])} if m else None
     return jsonify({"id": mid, "state": state, "progress": prog,
                     "log_tail": "\n".join(log.splitlines()[-24:])})
+
+
+@app.post("/api/import-scenes")
+def api_import_scenes():
+    """Upload GeoTIFF(s) to run inference on. Saves each into data/active/imagery/ (any CRS —
+    inference doesn't join to labels), validates it's a readable >=6-band raster, and never
+    touches annotations/training. Returns {imported, skipped}."""
+    import os
+    import rasterio
+    files = request.files.getlist("files")
+    if not files:
+        return jsonify({"error": "no files uploaded"}), 400
+    GEOTIFF_DIR.mkdir(parents=True, exist_ok=True)
+    imported, skipped = [], []
+    for f in files:
+        name = os.path.basename(f.filename or "")
+        if not name.lower().endswith((".tif", ".tiff")):
+            skipped.append({"name": name, "reason": "not a .tif/.tiff"})
+            continue
+        stem = name.rsplit(".", 1)[0]
+        dest = GEOTIFF_DIR / f"{stem}.tif"
+        if dest.exists():
+            skipped.append({"name": name, "reason": "a scene with this name already exists"})
+            continue
+        tmp = GEOTIFF_DIR / f".uploading_{stem}.tif"
+        f.save(str(tmp))
+        try:
+            with rasterio.open(tmp) as src:
+                bands, epsg = src.count, (src.crs.to_epsg() if src.crs else None)
+            if bands < 6:
+                tmp.unlink()
+                skipped.append({"name": name, "reason": f"{bands} bands (need the 8-band SuperDove product)"})
+                continue
+            tmp.rename(dest)
+            imported.append({"scene": stem, "bands": bands, "epsg": epsg})
+        except Exception as e:
+            if tmp.exists():
+                tmp.unlink()
+            skipped.append({"name": name, "reason": f"unreadable raster ({e})"})
+    return jsonify({"imported": imported, "skipped": skipped})
 
 
 @app.get("/outputs/<path:fname>")

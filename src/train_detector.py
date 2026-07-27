@@ -33,6 +33,7 @@ Run (CPU; MPS diverges — see docs/HARDWARE.md):
 import argparse
 import datetime
 import json
+import math
 import os
 from pathlib import Path
 
@@ -55,78 +56,121 @@ CHIP, HALF = 64, 32
 
 # ---------------------------------------------------------------- data ------
 def load_coco():
-    """{scene: [(chip uint8 HxWx3, kps float32[3,2] in chip px), ...]} from the export."""
+    """{scene: [(chip uint8 SxSx3, kps float32[N,3,2] center-vehicle-first, in export px), ...]}.
+
+    S is the exported chip size (CHIP + 2*margin); the model crops CHIP from it at train time.
+    Each chip carries the center vehicle plus any neighbours whose echo fell inside the window
+    (multi-vehicle targets); with legacy single-vehicle chips N == 1 and S == CHIP."""
     d = json.loads((COCO / "annotations.json").read_text())
-    anns = {a["image_id"]: a for a in d["annotations"]}
+    per_img = {}
+    for a in d["annotations"]:
+        per_img.setdefault(a["image_id"], []).append(a)
     by_scene = {}
     for im in d["images"]:
-        a = anns.get(im["id"])
-        if not a:
+        anns = per_img.get(im["id"])
+        if not anns:
             continue
+        anns = sorted(anns, key=lambda a: (not a.get("center", True), a["id"]))  # center vehicle first
         chip = np.asarray(Image.open(COCO / "images" / im["file_name"]).convert("RGB"))
-        kp = np.array(a["keypoints"], dtype=np.float32).reshape(3, 3)[:, :2]
-        by_scene.setdefault(im["scene"], []).append((chip, kp))
+        kps = np.stack([np.array(a["keypoints"], np.float32).reshape(3, 3)[:, :2] for a in anns])
+        by_scene.setdefault(im["scene"], []).append((chip, kps))
     return by_scene
 
 
 # ------------------------------------------------- augmentation (Adamiak) ---
-def augment(chip, kp, rng):
-    """Adamiak's augmentation: rotation, H/V flips, brightness, perspective — applied to
-    the image AND the keypoints. No translation jitter (not in Adamiak's list)."""
-    c, k = chip.copy(), kp.copy()
+def augment(img, pts, rng, size):
+    """Adamiak's augmentation: rotation, H/V flips, brightness, perspective — applied to the
+    SxS image AND all (M,2) keypoints in image space. Runs on the full export (e.g. 96px) BEFORE
+    the train-time crop, so rotation pulls real pixels into the corners instead of reflected pad.
+    Translation is handled separately by the jittered crop in ChipDS (not here)."""
+    c, k = img.copy(), pts.copy()
     if rng.random() < 0.5:                                   # horizontal flip
-        c = c[:, ::-1]; k[:, 0] = CHIP - 1 - k[:, 0]
+        c = c[:, ::-1]; k[:, 0] = size - 1 - k[:, 0]
     if rng.random() < 0.5:                                   # vertical flip
-        c = c[::-1, :]; k[:, 1] = CHIP - 1 - k[:, 1]
+        c = c[::-1, :]; k[:, 1] = size - 1 - k[:, 1]
     c = np.ascontiguousarray(c)
+    half = size / 2.0
 
     ang = rng.uniform(-180, 180)                             # rotation about center
-    M = cv2.getRotationMatrix2D((HALF, HALF), ang, 1.0)
-    c = cv2.warpAffine(c, M, (CHIP, CHIP), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
-    k = (np.hstack([k, np.ones((3, 1), np.float32)]) @ M.T).astype(np.float32)
+    M = cv2.getRotationMatrix2D((half, half), ang, 1.0)
+    c = cv2.warpAffine(c, M, (size, size), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
+    k = (np.hstack([k, np.ones((len(k), 1), np.float32)]) @ M.T).astype(np.float32)
 
     jit = rng.uniform(-5, 5, (4, 2)).astype(np.float32)      # mild perspective warp
-    src = np.array([[0, 0], [CHIP, 0], [CHIP, CHIP], [0, CHIP]], np.float32)
+    src = np.array([[0, 0], [size, 0], [size, size], [0, size]], np.float32)
     P = cv2.getPerspectiveTransform(src, src + jit)
-    c = cv2.warpPerspective(c, P, (CHIP, CHIP), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
-    kh = np.hstack([k, np.ones((3, 1), np.float32)]) @ P.T
+    c = cv2.warpPerspective(c, P, (size, size), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
+    kh = np.hstack([k, np.ones((len(k), 1), np.float32)]) @ P.T
     k = (kh[:, :2] / kh[:, 2:3]).astype(np.float32)
 
     c = np.clip(c.astype(np.float32) * rng.uniform(0.8, 1.2), 0, 255).astype(np.uint8)  # brightness
     return np.ascontiguousarray(c), k
 
 
-def to_target(k):
-    """torchvision Keypoint R-CNN target: 1 box + 1 label + 3 keypoints (visible)."""
-    k = k.copy()
-    k[:, 0] = np.clip(k[:, 0], 1, CHIP - 2)
-    k[:, 1] = np.clip(k[:, 1], 1, CHIP - 2)
-    pad = 3.0
-    x0, y0 = max(0.0, k[:, 0].min() - pad), max(0.0, k[:, 1].min() - pad)
-    x1, y1 = min(float(CHIP), k[:, 0].max() + pad), min(float(CHIP), k[:, 1].max() + pad)
-    w, h = max(x1 - x0, 4.0), max(y1 - y0, 4.0)
-    kpts = np.concatenate([k, np.full((3, 1), 2.0, np.float32)], axis=1)  # v=2 visible
+def to_target(kps):
+    """torchvision Keypoint R-CNN target for N vehicles in a chip: N boxes + N labels + N
+    keypoint-triples, all clipped into CHIP space. kps is float32[N,3,2]."""
+    kps = kps.copy()
+    kps[:, :, 0] = np.clip(kps[:, :, 0], 1, CHIP - 2)
+    kps[:, :, 1] = np.clip(kps[:, :, 1], 1, CHIP - 2)
+    boxes = []
+    for k in kps:
+        pad = 3.0
+        x0, y0 = max(0.0, k[:, 0].min() - pad), max(0.0, k[:, 1].min() - pad)
+        x1, y1 = min(float(CHIP), k[:, 0].max() + pad), min(float(CHIP), k[:, 1].max() + pad)
+        w, h = max(x1 - x0, 4.0), max(y1 - y0, 4.0)
+        boxes.append([x0, y0, x0 + w, y0 + h])
+    kpts = np.concatenate([kps, np.full((len(kps), 3, 1), 2.0, np.float32)], axis=2)  # v=2 visible
     return {
-        "boxes": torch.tensor([[x0, y0, x0 + w, y0 + h]], dtype=torch.float32),
-        "labels": torch.ones(1, dtype=torch.int64),          # class 1 = moving_echo
-        "keypoints": torch.tensor(kpts[None], dtype=torch.float32),
+        "boxes": torch.tensor(boxes, dtype=torch.float32),
+        "labels": torch.ones(len(kps), dtype=torch.int64),   # class 1 = moving_echo
+        "keypoints": torch.tensor(kpts, dtype=torch.float32),
     }
 
 
 class ChipDS(torch.utils.data.Dataset):
-    def __init__(self, items, repeat, seed, aug):
-        self.items, self.repeat, self.aug = items, repeat, aug
+    """Serves CHIP-sized (64px) training tensors cropped from the SxS export chips. When S > CHIP
+    (padded export) the crop origin is jittered every epoch — real-pixel translation augmentation —
+    with the legal range derived from the center vehicle's keypoints so it can never cut them and
+    never needs to resample. jitter=0 forces the exact center crop (the ablation control). Legacy
+    64px chips (S == CHIP) degrade to the old center crop automatically."""
+    def __init__(self, items, repeat, seed, aug, jitter=None):
+        self.items, self.repeat, self.aug, self.jitter = items, repeat, aug, jitter
         self.rng = np.random.default_rng(seed)
 
     def __len__(self):
         return len(self.items) * self.repeat
 
+    def _offset(self, coords, S, margin, jitter):
+        """Random 1-D crop origin that keeps every coord in [origin, origin+CHIP), clamped to the
+        jitter window [margin-jitter, margin+jitter] and the valid range [0, S-CHIP]."""
+        lo = max(int(np.floor(coords.max())) - CHIP + 1, margin - jitter, 0)
+        hi = min(int(np.floor(coords.min())), margin + jitter, S - CHIP)
+        if hi < lo:                                          # vehicle wider than the window: center it
+            return max(0, min(int(round(float(coords.mean())) - CHIP // 2), S - CHIP))
+        return int(self.rng.integers(lo, hi + 1))
+
     def __getitem__(self, i):
-        chip, kp = self.items[i % len(self.items)]
+        chip, kps = self.items[i % len(self.items)]          # chip SxSx3, kps (N,3,2) center-first
+        S = chip.shape[0]
+        margin = (S - CHIP) // 2
+        pts = kps.reshape(-1, 2).astype(np.float32).copy()
         if self.aug:
-            chip, kp = augment(chip, kp, self.rng)
-        img = torch.from_numpy(np.ascontiguousarray(chip)).permute(2, 0, 1).float() / 255.0
-        return img, to_target(kp)
+            chip, pts = augment(chip, pts, self.rng, S)
+        kps2 = pts.reshape(len(kps), 3, 2)
+        if self.aug and margin > 0:                          # jittered crop (real-pixel translation aug)
+            jitter = margin if self.jitter is None else self.jitter
+            ox = self._offset(kps2[0, :, 0], S, margin, jitter)
+            oy = self._offset(kps2[0, :, 1], S, margin, jitter)
+        else:
+            ox = oy = margin                                 # deterministic center crop (val / legacy)
+        crop = chip[oy:oy + CHIP, ox:ox + CHIP]
+        kps2 = kps2 - np.array([ox, oy], np.float32)
+        keep = [v for v in kps2 if (v >= 0).all() and (v < CHIP).all()]   # vehicles surviving the crop
+        if not keep:                                         # safety: center always kept
+            keep = [np.clip(kps2[0], 0.5, CHIP - 1.5)]
+        img = torch.from_numpy(np.ascontiguousarray(crop)).permute(2, 0, 1).float() / 255.0
+        return img, to_target(np.stack(keep).astype(np.float32))
 
 
 def collate(b):
@@ -149,16 +193,19 @@ def build_finetune(arch):
 # ----------------------------------------------------------------- eval -----
 @torch.no_grad()
 def eval_centered(model, items, thresh):
-    """Centered-chip recall on the held-out scene: one 64px chip per vehicle."""
+    """Centered-chip recall on the held-out scene: the center CHIP crop per vehicle (96->64)."""
     model.eval()
     det, errs = 0, []
-    for chip, kp in items:
-        img = torch.from_numpy(np.ascontiguousarray(chip)).permute(2, 0, 1).float() / 255.0
+    for chip, kps in items:
+        off = (chip.shape[0] - CHIP) // 2
+        crop = chip[off:off + CHIP, off:off + CHIP]
+        cen = kps[0] - off                                   # center vehicle keypoints in crop space
+        img = torch.from_numpy(np.ascontiguousarray(crop)).permute(2, 0, 1).float() / 255.0
         out = model([img])[0]
         if len(out["scores"]) and float(out["scores"][0]) > thresh:
             det += 1
             pred = out["keypoints"][0].numpy()[:, :2]
-            errs.append(float(np.linalg.norm(pred - kp, axis=1).mean()))
+            errs.append(float(np.linalg.norm(pred - cen, axis=1).mean()))
     return det / max(len(items), 1), (float(np.median(errs)) if errs else float("nan"))
 
 
@@ -177,31 +224,91 @@ def eval_full_scene(model, scene, thresh):
 
 
 # ---------------------------------------------------------------- train -----
-def train(train_items, val_items, arch, epochs, batch, lr, repeat, seed, ckpt_path, aug_on=True):
+def _to(imgs, tgts, device):
+    """Move a collated batch (tuple of images, tuple of target dicts) onto the device."""
+    return ([im.to(device) for im in imgs],
+            [{k: v.to(device) for k, v in t.items()} for t in tgts])
+
+
+def _mps_probe_ok():
+    """torchvision detection models RUN on Apple MPS but silently diverge (loss -> NaN) on many
+    PyTorch versions — no exception is raised. Probe with a few real train steps and accept MPS
+    only if the loss stays finite and bounded; otherwise the caller falls back to CPU."""
+    dev = torch.device("mps")
+    m = keypointrcnn_resnet50_fpn(weights=None, weights_backbone=None,
+                                  num_classes=2, num_keypoints=3, min_size=192, max_size=320).to(dev)
+    m.train()
+    opt = torch.optim.SGD(m.parameters(), lr=1e-3, momentum=0.9)
+    for _ in range(4):
+        imgs = [torch.rand(3, 192, 192, device=dev)]
+        tgt = [{"boxes": torch.tensor([[40., 40., 150., 150.]], device=dev),
+                "labels": torch.ones(1, dtype=torch.int64, device=dev),
+                "keypoints": torch.tensor([[[60., 60., 1.], [95., 95., 1.], [130., 130., 1.]]], device=dev)}]
+        loss = sum(m(imgs, tgt).values())
+        opt.zero_grad(); loss.backward(); opt.step()
+        v = float(loss.detach())
+        if not math.isfinite(v) or abs(v) > 1e4:
+            return False
+    return True
+
+
+def pick_device(prefer="auto"):
+    """Prefer a GPU, fall back to CPU. Order: CUDA (real speedup) -> MPS (only if it passes the
+    divergence probe) -> CPU. `prefer` in {auto, gpu, cuda, mps, cpu} forces a choice."""
+    if prefer == "cpu":
+        return torch.device("cpu")
+    if prefer in ("auto", "gpu", "cuda") and torch.cuda.is_available():
+        print("  device: CUDA available -> using GPU", flush=True)
+        return torch.device("cuda")
+    if prefer in ("auto", "gpu", "mps") and torch.backends.mps.is_available():
+        try:
+            if _mps_probe_ok():
+                print("  device: MPS probe passed -> using Apple GPU", flush=True)
+                return torch.device("mps")
+            print("  device: MPS available but DIVERGES on this model -> falling back to CPU", flush=True)
+        except Exception as e:
+            print(f"  device: MPS probe errored ({e}) -> CPU", flush=True)
+    return torch.device("cpu")
+
+
+def train(train_items, val_items, arch, epochs, batch, lr, repeat, seed, ckpt_path, aug_on=True,
+          device=None, jitter=None):
     torch.manual_seed(seed)
+    device = device or pick_device()
+    print(f"  training on: {device.type}", flush=True)
     model = mr.build_model(arch)
-    dl = DataLoader(ChipDS(train_items, repeat, seed, aug=aug_on), batch_size=batch,
+    dl = DataLoader(ChipDS(train_items, repeat, seed, aug=aug_on, jitter=jitter), batch_size=batch,
                     shuffle=True, collate_fn=collate, num_workers=0)
     vdl = DataLoader(ChipDS(val_items, 1, seed + 1, aug=False), batch_size=batch,
                      shuffle=False, collate_fn=collate, num_workers=0)
-    opt = torch.optim.Adam(model.parameters(), lr=lr)                       # Adam
-    sched = torch.optim.lr_scheduler.ReduceLROnPlateau(                     # ReduceLROnPlateau
-        opt, mode="min", factor=0.3, patience=2, min_lr=1e-5)
 
     start_ep = 1
     if ckpt_path.exists():
         # resume: the checkpoint already holds trained weights (skip the pretrained download)
         ck = torch.load(ckpt_path, map_location="cpu")
-        model.load_state_dict(ck["model"]); opt.load_state_dict(ck["opt"]); sched.load_state_dict(ck["sched"])
+        model.load_state_dict(ck["model"]); model.to(device)
+        opt = torch.optim.Adam(model.parameters(), lr=lr)
+        opt.load_state_dict(ck["opt"])
+        for st in opt.state.values():                                      # optimizer state -> device
+            for k, v in st.items():
+                if torch.is_tensor(v):
+                    st[k] = v.to(device)
+        sched = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, mode="min", factor=0.3, patience=2, min_lr=1e-5)
+        sched.load_state_dict(ck["sched"])
         start_ep = ck["epoch"] + 1
         print(f"resumed from checkpoint @ epoch {ck['epoch']} -> continuing at {start_ep}", flush=True)
     else:
         # fresh start: inject the COCO-pretrained backbone, then a 2-iter smoke (fail fast)
         pre = keypointrcnn_resnet50_fpn(weights="DEFAULT")
         model.backbone.load_state_dict(pre.backbone.state_dict()); del pre
+        model.to(device)
+        opt = torch.optim.Adam(model.parameters(), lr=lr)                  # Adam
+        sched = torch.optim.lr_scheduler.ReduceLROnPlateau(                # ReduceLROnPlateau
+            opt, mode="min", factor=0.3, patience=2, min_lr=1e-5)
         model.train()
         for j, (imgs, tgts) in enumerate(dl):
-            loss = sum(model(list(imgs), list(tgts)).values())
+            imgs, tgts = _to(imgs, tgts, device)
+            loss = sum(model(imgs, tgts).values())
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.5); opt.step()
             print(f"smoke iter {j+1}: loss={float(loss.detach()):.3f} finite={torch.isfinite(loss).item()}", flush=True)
@@ -212,7 +319,8 @@ def train(train_items, val_items, arch, epochs, batch, lr, repeat, seed, ckpt_pa
         model.train()
         tot, n = 0.0, 0
         for imgs, tgts in dl:
-            loss = sum(model(list(imgs), list(tgts)).values())             # composite loss
+            imgs, tgts = _to(imgs, tgts, device)
+            loss = sum(model(imgs, tgts).values())                         # composite loss
             if not torch.isfinite(loss):
                 opt.zero_grad(); continue
             opt.zero_grad(); loss.backward()
@@ -221,31 +329,45 @@ def train(train_items, val_items, arch, epochs, batch, lr, repeat, seed, ckpt_pa
         vtot, vn = 0.0, 0                                                   # validation loss
         with torch.no_grad():
             for imgs, tgts in vdl:
-                vl = sum(model(list(imgs), list(tgts)).values())
+                imgs, tgts = _to(imgs, tgts, device)
+                vl = sum(model(imgs, tgts).values())
                 if torch.isfinite(vl):
                     vtot += float(vl); vn += 1
         vloss = vtot / max(vn, 1)
         sched.step(vloss)                                                  # step on val loss
         print(f"epoch {ep:2d}/{epochs}  train_loss={tot/max(n,1):.3f}  "
               f"val_loss={vloss:.3f}  lr={opt.param_groups[0]['lr']:.2e}", flush=True)
-        # checkpoint every epoch so a kill costs one epoch, not the whole run (resumable)
-        torch.save({"epoch": ep, "model": model.state_dict(),
+        # checkpoint every epoch (model on CPU for portability) so a kill costs one epoch
+        torch.save({"epoch": ep, "model": {k: v.detach().cpu() for k, v in model.state_dict().items()},
                     "opt": opt.state_dict(), "sched": sched.state_dict()}, ckpt_path)
     model.eval()
+    model.to("cpu")                                                        # eval + save on CPU (detect_scene builds CPU tensors)
     return model
 
 
 # ----------------------------------------------------------- register + card
 def card_md(entry, n_train, train_scenes, held, per_scene, mean_cen, mean_f1):
     a, t, m = entry["arch"], entry["train"], entry["metrics"]
-    rows = []
-    for hs in held:
-        r = per_scene.get(hs, {})
-        rp = f"{r['recall']:.2f} / {r['precision']:.2f}" if "recall" in r else "— / —"
-        f1 = f"{r['f1']:.2f}" if "f1" in r else "—"
-        rows.append(f"| `{hs}` | {r.get('vehicles', '?')} | {r.get('centered_recall', '—')} | {rp} | **{f1}** |")
-    held_table = ("| held-out (untrained) scene | veh | centered | full R / P | full F1 |\n"
-                  "|---|---:|---:|---:|---:|\n" + "\n".join(rows))
+    if held:
+        rows = []
+        for hs in held:
+            r = per_scene.get(hs, {})
+            rp = f"{r['recall']:.2f} / {r['precision']:.2f}" if "recall" in r else "— / —"
+            f1 = f"{r['f1']:.2f}" if "f1" in r else "—"
+            rows.append(f"| `{hs}` | {r.get('vehicles', '?')} | {r.get('centered_recall', '—')} | {rp} | **{f1}** |")
+        results_block = (
+            "Every number below is measured on scenes the model **never saw in training** (data-separated —\n"
+            "no leakage). *Centered* recall is the easy \"recognise a centered echo\" metric; *full* R/P/F1 is the\n"
+            f"deployable sliding-window metric (threshold {m.get('eval_thresh')}).\n\n"
+            "| held-out (untrained) scene | veh | centered | full R / P | full F1 |\n"
+            "|---|---:|---:|---:|---:|\n" + "\n".join(rows) +
+            f"\n\n**Mean across held-out scenes: centered {mean_cen} · full-scene F1 {mean_f1}.**")
+    else:
+        results_block = (
+            "**Trained on all scenes — no held-out test set.** This is a **deployment model**: there are no\n"
+            "labels held back to score against. Evaluate it qualitatively by running inference on **new imagery**\n"
+            "in the console's Inference tab (it shows detections + the montage, with no metrics to validate\n"
+            "against). For a measured generalization number, train a sibling model that holds a few scenes out.")
     return f"""# {entry['name']}
 
 `{entry['id']}` · created {entry['created']} · weights `{entry['weights']}`
@@ -274,8 +396,7 @@ the current, understood baseline for the detector rebuild.
 - **Training:** Adam · ReduceLROnPlateau on validation loss · LR 1e-3 → 1e-5 · grad-clip 1.5 · composite
   torchvision loss · {t.get('epochs')} epochs · batch {t.get('batch')} · {t.get('device')}.
 - **Augmentation:** {t.get('aug')}.
-- **Data:** trained on {n_train} vehicles across {len(train_scenes)} scenes; held out {len(held)} untrained
-  scene(s) for testing (below). Training scenes: {', '.join(f'`{s}`' for s in train_scenes)}.
+- **Data:** trained on {n_train} vehicles across {len(train_scenes)} scenes; {('held out ' + str(len(held)) + ' untrained scene(s) for testing (below)') if held else 'no held-out set (all scenes trained)'}.
 
 ## Deviations from Adamiak (our setup differs)
 - **Finetuned from the COCO-pretrained backbone** (`weights="DEFAULT"`), not trained from scratch — our label
@@ -284,22 +405,56 @@ the current, understood baseline for the detector rebuild.
 - **64×64 chips**, not their 512×512 images (kept our chip size; anchors may need a sweep because of it).
 - **Leave-one-scene-out** split, not random 80/10/10 (a random split leaks same-scene cues and inflates).
 
-## Results — on untrained (held-out) scenes only
+## Results
 
-Every number below is measured on scenes the model **never saw in training** (data-separated — no leakage).
-*Centered* recall is the easy "recognise a centered echo" metric; *full* R/P/F1 is the deployable sliding-window
-metric (threshold {m.get('eval_thresh')}, so threshold-dependent).
-
-{held_table}
-
-**Mean across held-out scenes: centered {mean_cen} · full-scene F1 {mean_f1}.** Cross-*corridor* scenes (a
-region absent from training) are the honest generalization test; same-corridor held-out scenes measure
-generalization to new traffic on a known road.
+{results_block}
 
 ## Not built yet (deliberately, for later)
 Keypoint correction · the anchor sweep · threshold calibration · the geometry/physics filter · velocity.
 See [REFINEMENT.md](../../docs/REFINEMENT.md).
 """
+
+
+def footprint_split_check(train_scenes, held_scenes, decim=8):
+    """Beyond the name-based leakage guard: reproject valid footprints to catch SPATIAL overlap a
+    name split can't see (every corridor here is one footprint re-captured on different dates).
+    Warns per held scene and returns {scene: 'temporal'|'spatial'|'unknown'} — temporal = overlaps
+    a trained scene (same-ground-later-date, NOT generalization); spatial = a genuinely new place."""
+    import rasterio
+    from rasterio.warp import reproject, Resampling
+    from export_coco import RED, GREEN, BLUE
+    geo = REPO / "data" / "active" / "imagery"
+
+    def vmask(p):
+        with rasterio.open(p) as s:
+            h, w = max(1, s.height // decim), max(1, s.width // decim)
+            r = s.read(RED, out_shape=(h, w)).astype(np.int64)
+            g = s.read(GREEN, out_shape=(h, w)); b = s.read(BLUE, out_shape=(h, w))
+            return (r + g + b) > 0, s.transform * s.transform.scale(s.width / w, s.height / h), s.crs
+
+    tmasks = {t: vmask(geo / f"{t}.tif") for t in train_scenes if (geo / f"{t}.tif").exists()}
+    labels = {}
+    print("spatial-overlap guard (held-out footprint vs trained scenes):", flush=True)
+    for h in held_scenes:
+        hp = geo / f"{h}.tif"
+        if not hp.exists():
+            labels[h] = "unknown"; print(f"  {h}: imagery missing -> UNKNOWN", flush=True); continue
+        hm, ht, hc = vmask(hp)
+        best, who = 0.0, None
+        for t, (tm, tt, tc) in tmasks.items():
+            dst = np.zeros(hm.shape, "uint8")
+            reproject(tm.astype("uint8"), dst, src_transform=tt, src_crs=tc,
+                      dst_transform=ht, dst_crs=hc, resampling=Resampling.nearest)
+            frac = float((hm & (dst > 0)).sum()) / max(int(hm.sum()), 1)
+            if frac > best:
+                best, who = frac, t
+        labels[h] = "temporal" if best > 0.2 else "spatial"
+        if labels[h] == "temporal":
+            print(f"  ! {h}: TEMPORAL — {best*100:.0f}% footprint overlap with trained {who} "
+                  f"(same-ground-later-date, NOT spatial generalization)", flush=True)
+        else:
+            print(f"  {h}: spatial (clean; max overlap {best*100:.0f}%)", flush=True)
+    return labels
 
 
 def main(a):
@@ -315,11 +470,16 @@ def main(a):
             raise SystemExit(f"train scene(s) not found: {bad_t}. available: {sorted(by_scene)}")
     else:
         train_scenes = [s for s in sorted(by_scene) if s not in held]   # everything not held out
+    excl = [s.strip() for s in (a.exclude or "").split(",") if s.strip()]
+    if excl:
+        train_scenes = [s for s in train_scenes if s not in excl]       # dropped from training, NOT held out
+        print(f"excluded from training (neither trained nor scored): {excl}", flush=True)
     leak = sorted(set(train_scenes) & set(held))
     if leak:
         raise SystemExit(f"LEAKAGE: scene(s) in BOTH train and held-out: {leak}")
     if not train_scenes:
         raise SystemExit("no training scenes selected")
+    split_type = footprint_split_check(train_scenes, held)              # spatial guard (names can't see it)
     all_train = [it for s in train_scenes for it in by_scene[s]]
 
     # carve a small random val subset for the LR scheduler ONLY (the held-out scenes stay
@@ -328,7 +488,11 @@ def main(a):
     perm = rng.permutation(len(all_train))
     nval = max(8, int(0.12 * len(all_train)))
     val_items = [all_train[i] for i in perm[:nval]]
-    train_items = [all_train[i] for i in perm[nval:]]
+    if held:
+        train_items = [all_train[i] for i in perm[nval:]]   # held-out testing: val disjoint from train
+    else:
+        train_items = all_train                             # deployment (no held-out): train on ALL chips;
+        #                                                     val overlaps train, used only for the LR signal
 
     arch = {
         "backbone": "resnet50-fpn", "classes": 2, "keypoints": 3,
@@ -341,10 +505,11 @@ def main(a):
     print(f"anchors sizes={arch['anchor_sizes']} ratios={arch['aspect_ratios']}  "
           f"epochs={a.epochs} batch={a.batch} repeat={a.repeat} lr={a.lr}", flush=True)
 
+    device = pick_device(a.device)
     ckpt_path = REPO / "weights" / f"{a.id}.ckpt.pt"
     (REPO / "weights").mkdir(exist_ok=True)
     model = train(train_items, val_items, arch, a.epochs, a.batch, a.lr, a.repeat, a.seed, ckpt_path,
-                  aug_on=(a.aug != "none"))
+                  aug_on=(a.aug != "none"), device=device, jitter=(None if a.jitter < 0 else a.jitter))
 
     # evaluate each held-out scene independently — the honest, untrained test set
     per_scene, f1s, cens = {}, [], []
@@ -364,13 +529,17 @@ def main(a):
         print(line, flush=True)
     mean_cen = round(sum(cens) / len(cens), 3) if cens else None
     mean_f1 = round(sum(f1s) / len(f1s), 3) if f1s else None
-    print(f"\nMEAN over {len(held)} held-out scene(s): centered {mean_cen}  full-scene F1 {mean_f1}", flush=True)
+    if held:
+        print(f"\nMEAN over {len(held)} held-out scene(s): centered {mean_cen}  full-scene F1 {mean_f1}", flush=True)
+    else:
+        print("\ntrained on ALL scenes — no held-out set (deployment model; evaluate on new imagery)", flush=True)
 
     (REPO / "weights").mkdir(exist_ok=True)
     wpath = REPO / "weights" / f"{a.id}.pt"
     torch.save(model.state_dict(), wpath)
 
-    metrics = {"heldout_scenes": held, "eval_thresh": a.thresh, "per_scene": per_scene}
+    metrics = {"heldout_scenes": held, "heldout_split_type": split_type,
+               "eval_thresh": a.thresh, "per_scene": per_scene}
     if mean_cen is not None:
         metrics["heldout_recall_centered_mean"] = mean_cen
     if mean_f1 is not None:
@@ -386,11 +555,15 @@ def main(a):
                   "batch": a.batch, "lr": a.lr,
                   "aug": "rotate+flip+brightness+perspective (Adamiak)" if a.aug != "none" else "none",
                   "finetune": "COCO-pretrained backbone (weights=DEFAULT)",
-                  "device": "cpu", "script": "src/train_detector.py"},
+                  "device": device.type, "script": "src/train_detector.py"},
         "metrics": metrics,
-        "notes": a.notes or (f"Adamiak-spec detector (finetuned backbone, 64px chips, small anchors). "
-                             f"Trained on {len(train_scenes)} scenes, tested on {len(held)} untrained held-out "
-                             f"scene(s): {', '.join(held)}. See the card for per-scene results."),
+        "notes": a.notes or (
+            (f"Adamiak-spec detector (finetuned backbone, 64px chips, small anchors), trained on ALL "
+             f"{len(train_scenes)} scenes — no held-out set (deployment model; evaluate on new imagery).")
+            if not held else
+            (f"Adamiak-spec detector (finetuned backbone, 64px chips, small anchors). Trained on "
+             f"{len(train_scenes)} scenes, tested on {len(held)} untrained held-out scene(s): "
+             f"{', '.join(held)}. See the card for per-scene results.")),
     }
     reg = mr.load()
     reg["models"] = [m for m in reg["models"] if m["id"] != a.id] + [entry]
@@ -412,18 +585,24 @@ if __name__ == "__main__":
     p.add_argument("--name", required=True)
     p.add_argument("--held", default="Tacoma-Centralia_01_20260429",
                    help="comma-separated held-out (untrained) TEST scenes")
+    p.add_argument("--exclude", default=None,
+                   help="comma-separated scenes to drop from training WITHOUT holding them out (neither trained nor scored)")
     p.add_argument("--train", default=None,
                    help="comma-separated TRAIN scenes (default: every scene not held out)")
     p.add_argument("--anchor-sizes", dest="anchor_sizes", default="4,8,16,32,48")
     p.add_argument("--aspect-ratios", dest="aspect_ratios", default="0.25,0.5,0.75,1.0,1.25")
     p.add_argument("--min-size", dest="min_size", type=int, default=192)
     p.add_argument("--max-size", dest="max_size", type=int, default=320)
+    p.add_argument("--device", choices=["auto", "gpu", "cuda", "mps", "cpu"], default="auto",
+                   help="auto = CUDA if present, else MPS if it passes the divergence probe, else CPU")
     p.add_argument("--aug", choices=["none", "adamiak"], default="adamiak",
                    help="augmentation: 'adamiak' (rotate/flip/brightness/perspective) or 'none'")
     p.add_argument("--epochs", type=int, default=12)
     p.add_argument("--batch", type=int, default=4)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--repeat", type=int, default=3, help="augmented samples per vehicle per epoch")
+    p.add_argument("--jitter", type=int, default=-1,
+                   help="max crop-translation px (default: derive from chip margin; 0 = center-crop ablation control)")
     p.add_argument("--thresh", type=float, default=0.3, help="eval confidence threshold")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--set-active", dest="set_active", action="store_true")

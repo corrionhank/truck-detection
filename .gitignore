@@ -7,6 +7,8 @@ data/active/_backups/
 data/cold/
 data/inbox/*
 !data/inbox/README.md
+data/inbox-scenes/*
+!data/inbox-scenes/README.md
 data/exports/
 imagery/
 outputs/
@@ -58,3 +60,9 @@ build/
 
 # --- OS ---
 .DS_Store
+
+# superseded working drafts (kept locally, not published)
+docs/archive/
+
+# imported exchange bundle (imagery is EDU-licensed; already merged into data/active)
+Annotations-RGB_trg-echo-exchange/

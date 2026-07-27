@@ -125,6 +125,14 @@ input[type=range] { accent-color: var(--accent); }
 /* teal model-version chip — the ONE secondary accent, model/inference only */
 .chip-model { font-family: var(--font-mono); font-size: 11px; font-weight: 600; letter-spacing: .02em; padding: 2px 9px; border-radius: var(--r-pill); background: rgba(22,181,194,.13); color: var(--accent-2); border: 1px solid rgba(22,181,194,.30); white-space: nowrap; }
 
+/* post-inference image inspector (full scene / crops, zoom + scroll) */
+.detect-view { overflow: auto; max-height: 620px; border: 1px solid var(--border); border-radius: var(--r-ctl); background: var(--code-bg); }
+.detect-view img { border-radius: var(--r-ctl); }
+
+/* upload-imagery-for-inference button (a label wrapping a hidden file input) */
+.import-scenes { height: 26px; font-size: 12px; cursor: pointer; }
+.import-scenes.disabled { opacity: .5; cursor: default; }
+
 /* train/heldout/unseen leakage guard on the inference page */
 .split-banner { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-ctl); background: var(--code-bg); }
 

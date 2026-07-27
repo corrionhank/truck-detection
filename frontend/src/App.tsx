@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Truck, Play, Database, BarChart3, Layers, ScanLine, FileText, Loader2, Cpu } from 'lucide-react'
+import { useEffect, useState, type ChangeEvent } from 'react'
+import { Truck, Play, Database, BarChart3, Layers, ScanLine, FileText, Loader2, Cpu, Images } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import annotationsSpec from './docs/annotations-spec.md?raw'
@@ -7,7 +7,7 @@ import annotationsSpec from './docs/annotations-spec.md?raw'
 // Sibling app (Satellite Data Tooling Hub) — the reciprocal nav target.
 const HUB_URL = 'http://localhost:5000/'
 
-type Tab = 'dataset' | 'results' | 'models' | 'training' | 'inference' | 'spec'
+type Tab = 'dataset' | 'scenes' | 'results' | 'models' | 'training' | 'inference' | 'spec'
 
 type ModelEntry = {
   id: string
@@ -70,9 +70,11 @@ export default function App() {
   const [registry, setRegistry] = useState<Registry | null>(null)
   const refreshModels = () =>
     fetch('/api/models').then((r) => r.json()).then(setRegistry).catch(() => setRegistry(null))
+  const refreshScenes = () =>
+    fetch('/api/scenes').then((r) => r.json()).then((d) => setScenes(d.scenes)).catch(() => setScenes([]))
 
   useEffect(() => {
-    fetch('/api/scenes').then((r) => r.json()).then((d) => setScenes(d.scenes)).catch(() => setScenes([]))
+    refreshScenes()
     refreshModels()
   }, [])
 
@@ -100,9 +102,12 @@ export default function App() {
             PlanetScope SuperDove imagery — the model half of the project.
           </p>
 
-          <div className="segmented" style={{ maxWidth: 660 }}>
+          <div className="segmented" style={{ maxWidth: 760 }}>
             <button className={tab === 'dataset' ? 'active' : ''} onClick={() => setTab('dataset')}>
               <Database size={14} /> Dataset
+            </button>
+            <button className={tab === 'scenes' ? 'active' : ''} onClick={() => setTab('scenes')}>
+              <Images size={14} /> Scenes
             </button>
             <button className={tab === 'results' ? 'active' : ''} onClick={() => setTab('results')}>
               <BarChart3 size={14} /> Results
@@ -122,10 +127,11 @@ export default function App() {
           </div>
 
           {tab === 'dataset' && <DatasetView totalScenes={scenes.length} />}
+          {tab === 'scenes' && <ScenesView scenes={scenes} registry={registry} refreshScenes={refreshScenes} />}
           {tab === 'results' && <ResultsView />}
           {tab === 'models' && <ModelsView registry={registry} refresh={refreshModels} onRun={() => setTab('inference')} />}
           {tab === 'training' && <TrainingView scenes={scenes} refresh={refreshModels} />}
-          {tab === 'inference' && <InferenceView scenes={scenes} registry={registry} />}
+          {tab === 'inference' && <InferenceView scenes={scenes} registry={registry} refreshScenes={refreshScenes} />}
           {tab === 'spec' && <SpecView />}
         </div>
       </main>
@@ -400,9 +406,14 @@ function TrainingView({ scenes, refresh }: { scenes: Scene[]; refresh: () => voi
   const [id, setId] = useState('')
   const [name, setName] = useState('')
   const [anchors, setAnchors] = useState('adamiak')
+  const [anchorSizes, setAnchorSizes] = useState('4,8,16,32,48')
+  const [anchorRatios, setAnchorRatios] = useState('0.25,0.5,0.75,1.0,1.25')
   const [aug, setAug] = useState('adamiak')
   const [epochs, setEpochs] = useState(12)
   const [lr, setLr] = useState(0.001)
+  const [batch, setBatch] = useState(4)
+  const [repeat, setRepeat] = useState(2)
+  const [advanced, setAdvanced] = useState(false)
   const [roles, setRoles] = useState<Record<string, Role>>({})
   const [job, setJob] = useState<Job | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -439,7 +450,10 @@ function TrainingView({ scenes, refresh }: { scenes: Scene[]; refresh: () => voi
     try {
       const r = await fetch('/api/train', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, name, train_scenes: trainScenes, held_scenes: heldScenes, anchors, aug, epochs, lr }),
+        body: JSON.stringify({
+          id, name, train_scenes: trainScenes, held_scenes: heldScenes, anchors, aug, epochs, lr, batch, repeat,
+          ...(anchors === 'custom' ? { anchor_sizes: anchorSizes, aspect_ratios: anchorRatios } : {}),
+        }),
       })
       const d = await r.json()
       if (!r.ok) throw new Error(d.error || r.statusText)
@@ -465,24 +479,59 @@ function TrainingView({ scenes, refresh }: { scenes: Scene[]; refresh: () => voi
           <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Keypoint R-CNN v3" disabled={running} /></div>
       </div>
 
-      <label className="field-label">Anchors (model philosophy)</label>
+      <label className="field-label">Anchors — the box sizes the model looks for (the biggest lever)</label>
       <select value={anchors} onChange={(e) => setAnchors(e.target.value)} disabled={running}>
-        <option value="adamiak">Adamiak small — 4/8/16/32/48 × 0.25–1.25</option>
-        <option value="small">small — 8–128 × 0.5/1/2</option>
-        <option value="default">default — 32–512 × 0.5/1/2</option>
+        <option value="adamiak">Adamiak small — 4/8/16/32/48 × 0.25–1.25  (paper's tuned default)</option>
+        <option value="tiny">tiny — 2/4/8/16/32 × 0.25/0.5/1/2  (faintest streaks)</option>
+        <option value="streak">streak — 4/8/16/32/48 × 0.2–1.0  (elongated, for diagonal streaks)</option>
+        <option value="small">small — 8/16/32/64/128 × 0.5/1/2  (moderate)</option>
+        <option value="default">default — 32/64/128/256/512 × 0.5/1/2  (too big for echoes)</option>
+        <option value="custom">custom…</option>
       </select>
+      {anchors === 'custom' ? (
+        <div className="train-grid" style={{ marginTop: 6 }}>
+          <div><label className="field-label">sizes (px, comma-sep)</label>
+            <input type="text" value={anchorSizes} onChange={(e) => setAnchorSizes(e.target.value)}
+              placeholder="4,8,16,32,48" disabled={running} /></div>
+          <div><label className="field-label">aspect ratios (w:h)</label>
+            <input type="text" value={anchorRatios} onChange={(e) => setAnchorRatios(e.target.value)}
+              placeholder="0.25,0.5,0.75,1.0,1.25" disabled={running} /></div>
+        </div>
+      ) : (
+        <p className="hint" style={{ margin: '2px 0 0' }}>
+          Echoes are ~4–8 px — small sizes bracket them; the 32–512 default misses them entirely.
+        </p>
+      )}
 
-      <div className="train-grid3">
+      <div className="train-grid3" style={{ marginTop: 8 }}>
         <div><label className="field-label">Augmentation</label>
           <select value={aug} onChange={(e) => setAug(e.target.value)} disabled={running}>
             <option value="adamiak">Adamiak (rotate/flip/bright/persp)</option>
             <option value="none">none</option>
-          </select></div>
+          </select>
+          <p className="hint" style={{ margin: '2px 0 0' }}>synthetic variety → fights overfitting</p></div>
         <div><label className="field-label">Epochs</label>
-          <input type="number" value={epochs} onChange={(e) => setEpochs(+e.target.value)} disabled={running} /></div>
+          <input type="number" value={epochs} onChange={(e) => setEpochs(+e.target.value)} disabled={running} />
+          <p className="hint" style={{ margin: '2px 0 0' }}>passes over the data (~10–15)</p></div>
         <div><label className="field-label">Learning rate</label>
-          <input type="number" step={0.0001} value={lr} onChange={(e) => setLr(+e.target.value)} disabled={running} /></div>
+          <input type="number" step={0.0001} value={lr} onChange={(e) => setLr(+e.target.value)} disabled={running} />
+          <p className="hint" style={{ margin: '2px 0 0' }}>step size — the most sensitive knob</p></div>
       </div>
+
+      <button className="ghost" style={{ height: 26, alignSelf: 'flex-start' }} onClick={() => setAdvanced(!advanced)}>
+        {advanced ? '▾ Advanced' : '▸ Advanced (batch, repeat)'}
+      </button>
+      {advanced && (
+        <div className="train-grid3">
+          <div><label className="field-label">Batch size</label>
+            <input type="number" value={batch} onChange={(e) => setBatch(+e.target.value)} disabled={running} />
+            <p className="hint" style={{ margin: '2px 0 0' }}>chips per update (2–4)</p></div>
+          <div><label className="field-label">Repeat</label>
+            <input type="number" value={repeat} onChange={(e) => setRepeat(+e.target.value)} disabled={running} />
+            <p className="hint" style={{ margin: '2px 0 0' }}>aug views / vehicle / epoch (2–3)</p></div>
+          <div />
+        </div>
+      )}
 
       <label className="field-label">Data — pick train vs held-out (test) per scene</label>
       <div className="list" style={{ gap: 6 }}>
@@ -523,7 +572,108 @@ function TrainingView({ scenes, refresh }: { scenes: Scene[]; refresh: () => voi
   )
 }
 
-function InferenceView({ scenes, registry }: { scenes: Scene[]; registry: Registry | null }) {
+function ImportImagery({ refreshScenes, onImported }: { refreshScenes: () => Promise<void> | void; onImported?: (scene: string) => void }) {
+  const [importing, setImporting] = useState(false)
+  const [msg, setMsg] = useState<string | null>(null)
+  const upload = async (e: ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files
+    if (!files || !files.length) return
+    setImporting(true); setMsg('uploading…')
+    const fd = new FormData()
+    Array.from(files).forEach((f) => fd.append('files', f))
+    try {
+      const r = await fetch('/api/import-scenes', { method: 'POST', body: fd })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || r.statusText)
+      await refreshScenes()
+      const parts = [`imported ${d.imported.length} scene${d.imported.length === 1 ? '' : 's'}`]
+      if (d.skipped?.length) parts.push(`skipped ${d.skipped.length} (${d.skipped.map((s: { name: string; reason: string }) => `${s.name}: ${s.reason}`).join('; ')})`)
+      setMsg(parts.join(' · '))
+      if (d.imported?.length) onImported?.(d.imported[0].scene)
+    } catch (err) {
+      setMsg('import failed: ' + String(err instanceof Error ? err.message : err))
+    } finally {
+      setImporting(false); e.target.value = ''
+    }
+  }
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+      <label className={`ghost import-scenes ${importing ? 'disabled' : ''}`}
+        title="Upload GeoTIFF(s) for inference — added to the scene list; no labels/training touched">
+        {importing ? <Loader2 size={12} className="spin" /> : '＋'} Import imagery
+        <input type="file" accept=".tif,.tiff" multiple disabled={importing} style={{ display: 'none' }} onChange={upload} />
+      </label>
+      {msg && <span className="hint">{msg}</span>}
+    </span>
+  )
+}
+
+function ScenesView({ scenes, registry, refreshScenes }: { scenes: Scene[]; registry: Registry | null; refreshScenes: () => Promise<void> | void }) {
+  const [modelId, setModelId] = useState('')
+  const [busy, setBusy] = useState<string | null>(null)
+  useEffect(() => { if (!modelId && registry) setModelId(registry.active) }, [registry, modelId])
+  const model = registry?.models.find((m) => m.id === modelId)
+
+  const remove = async (name: string, labeled: boolean) => {
+    if (labeled && !window.confirm(
+      `${name} is a LABELED training scene. Removing its imagery takes it out of the loaded set ` +
+      `(moved to data/cold/, recoverable) — its labels stay, but it can't be trained on until re-imported. Remove it?`)) return
+    setBusy(name)
+    try {
+      await fetch('/api/scenes/remove', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) })
+      await refreshScenes()
+    } finally { setBusy(null) }
+  }
+
+  const rows = scenes.map((s) => ({ ...s, split: evalSplit(model, s.name) }))
+  const counts: Record<Split, number> = { train: 0, heldout: 0, unseen: 0 }
+  rows.forEach((r) => { counts[r.split]++ })
+
+  return (
+    <div className="card" style={{ maxWidth: 900 }}>
+      <div className="row-between">
+        <div className="section-label">Loaded scenes</div>
+        <ImportImagery refreshScenes={refreshScenes} />
+      </div>
+      <p className="hint" style={{ margin: 0 }}>
+        Every image the console can run inference on. Status is relative to the model below —
+        <b> trained</b> (metrics leak), <b> held-out</b> (clean test), or <b> unseen</b> (never trained on).
+        Remove takes a scene out of the set (moved to <code>data/cold/</code>, recoverable).
+      </p>
+
+      <label className="field-label">Status relative to model</label>
+      <select value={modelId} onChange={(e) => setModelId(e.target.value)}>
+        {registry?.models.filter((m) => m.status !== 'archived' || m.id === registry.active).map((m) => (
+          <option key={m.id} value={m.id}>{m.name}{m.id === registry.active ? ' · active' : ''}</option>
+        ))}
+      </select>
+      <p className="hint" style={{ margin: '2px 0' }}>
+        {scenes.length} scene{scenes.length === 1 ? '' : 's'} loaded · {counts.train} trained · {counts.heldout} held-out · {counts.unseen} unseen
+      </p>
+
+      <div className="list" style={{ gap: 6 }}>
+        {rows.map((s) => {
+          const si = SPLIT[s.split]
+          return (
+            <div key={s.name} className="row-between train-scene">
+              <span className="mono" style={{ fontSize: 13 }}>{s.name}{' '}
+                <span className="hint">{s.vehicles ? `${s.vehicles} veh` : 'unlabeled'}</span></span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span className={`badge-state ${si.cls}`}>{si.label}</span>
+                <button className="ghost" style={{ height: 26 }} disabled={busy === s.name}
+                  onClick={() => remove(s.name, !!s.vehicles)}>
+                  {busy === s.name ? <Loader2 size={12} className="spin" /> : '✕'} remove
+                </button>
+              </span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function InferenceView({ scenes, registry, refreshScenes }: { scenes: Scene[]; registry: Registry | null; refreshScenes: () => Promise<void> | void }) {
   const [scene, setScene] = useState('')
   const [modelId, setModelId] = useState('')
   const [thresh, setThresh] = useState(0.5)
@@ -571,15 +721,21 @@ function InferenceView({ scenes, registry }: { scenes: Scene[]; registry: Regist
       </p>
 
       <label className="field-label">Model</label>
+      {/* only usable models: archived ones are hidden here (Archive in the Models tab hides from Inference) */}
       <select value={modelId} onChange={(e) => setModelId(e.target.value)} disabled={busy}>
-        {registry?.models.map((m) => (
-          <option key={m.id} value={m.id}>
-            {m.name}{m.id === registry.active ? ' · active' : ` · ${m.status}`}
-          </option>
-        ))}
+        {registry?.models
+          .filter((m) => m.status !== 'archived' || m.id === registry.active)
+          .map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.name}{m.id === registry.active ? ' · active' : ''}
+            </option>
+          ))}
       </select>
 
-      <label className="field-label">Scene</label>
+      <div className="row-between" style={{ alignItems: 'baseline' }}>
+        <label className="field-label">Scene</label>
+        <ImportImagery refreshScenes={refreshScenes} onImported={setScene} />
+      </div>
       <select value={scene} onChange={(e) => setScene(e.target.value)} disabled={busy}>
         {scenes.map((s) => (
           <option key={s.name} value={s.name}>
@@ -644,6 +800,8 @@ function ResultPanel({ result, nonce }: { result: DetectResult; nonce: number })
 
   const split = result.eval_split
   const si = split ? SPLIT[split] : null
+  const [view, setView] = useState<'scene' | 'crops'>('scene')
+  const [zoom, setZoom] = useState(1)
 
   return (
     <div style={{ marginTop: 16 }}>
@@ -683,11 +841,38 @@ function ResultPanel({ result, nonce }: { result: DetectResult; nonce: number })
           matters more than per-truck recall (Van Etten 2024).
         </p>
       )}
-      <img
-        src={`${result.montage_url}?v=${nonce}`}
-        alt="detections"
-        style={{ width: '100%', borderRadius: 8, marginTop: 8, border: '1px solid var(--border, #ddd)' }}
-      />
+      {/* inspect the whole scene (all detections drawn) + per-detection crops */}
+      <div className="row-between" style={{ marginTop: 12, marginBottom: 6, alignItems: 'center' }}>
+        <div className="segmented" style={{ maxWidth: 320 }}>
+          <button className={view === 'scene' ? 'active' : ''} onClick={() => setView('scene')}>Full scene</button>
+          <button className={view === 'crops' ? 'active' : ''} onClick={() => setView('crops')}>Detection crops</button>
+        </div>
+        {view === 'scene' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span className="hint">zoom</span>
+            {[1, 2, 4].map((z) => (
+              <button key={z} className={`role ${zoom === z ? 'role-train' : ''}`} onClick={() => setZoom(z)}>
+                {z === 1 ? 'fit' : z + '×'}
+              </button>
+            ))}
+            <a className="link" style={{ fontSize: 12 }} href={`${result.preview_url}?v=${nonce}`} target="_blank" rel="noreferrer">open ↗</a>
+          </div>
+        )}
+      </div>
+      <div className="detect-view">
+        <img
+          src={`${(view === 'scene' ? result.preview_url : result.montage_url)}?v=${nonce}`}
+          alt={view === 'scene' ? 'full scene with all detections' : 'detection crops'}
+          style={view === 'scene' && zoom > 1
+            ? { width: `${zoom * 100}%`, maxWidth: 'none', display: 'block' }
+            : { width: '100%', display: 'block' }}
+        />
+      </div>
+      <p className="hint" style={{ marginTop: 4 }}>
+        {view === 'scene'
+          ? `The whole scene with every detection marked (blue → red → green). ${result.count} detection${result.count === 1 ? '' : 's'} — zoom + scroll to inspect them, or "open ↗" for full resolution.`
+          : `Each detection cropped + zoomed with its confidence score${g ? ' (GT = matched a label, FP? = off-label)' : ''}.`}
+      </p>
     </div>
   )
 }
