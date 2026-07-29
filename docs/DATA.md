@@ -93,8 +93,8 @@ python3 src/import_data.py --dry-run   # validate + report the join, change noth
 python3 src/import_data.py             # ingest + merge + rebuild chips
 ```
 
-`src/import_data.py` validates each set against the contract above (layer `Annotations`, EPSG:32610, Point
-geometry, `sequence` 1/2/3, complete B/R/G triples), **checks every `scene` resolves to a GeoTIFF** (the one
+`src/import_data.py` validates each set against the contract above (layer `Annotations`, Point geometry,
+`sequence` 1/2/3, complete B/R/G triples), **checks every `scene` resolves to a GeoTIFF** (the one
 field that silently breaks the join — orphans are reported and skipped, never dropped silently), then moves
 imagery into `data/active/imagery/`, merges labels into `Annotations-RGB.gpkg` (**replace-by-scene**; the gpkg
 is backed up to `data/active/_backups/` first), regenerates the COCO chips, and files processed sets under
@@ -109,26 +109,28 @@ current data (executable spec + round-trip test).
 
 ## 6. Current corpus (snapshot)
 
-**339 vehicles / 1,017 keypoints across 8 labeled scenes** (up ~21× from an initial 16). Format-validated:
-exports cleanly to COCO (339/339, 0 dropped), every vehicle a complete B/R/G triple, EPSG:32610.
+**789 vehicles / 2,367 keypoints across 21 labeled scenes** (2026-07-29). Format-validated: exports cleanly to
+COCO (789/789, 0 dropped), every vehicle a complete B/R/G triple. **Two scenes are EPSG:32611** (Tri-Cities,
+Spokane — east of 120°W); imagery keeps its native zone and points reproject per scene at export (§2).
 
-| Scene | Corridor | Vehicles |
-|---|---|---:|
-| Tacoma-Centralia_02_20260602 | south I-5 | 101 |
-| Tacoma-Centralia_01_20260429 | south I-5 | 94 |
-| Centralia_01_20260511 | south I-5 | 58 |
-| Centralia_02_20260511 | south I-5 | 54 |
-| Ellensburg_01_20260504 | I-90 | 13 |
-| Bellingham_01_20260425 | north I-5 | 11 |
-| Stanwood_10_20260511 | north I-5 | 6 |
-| EllensburgPreferredTest_01_20260530 | I-90 (test) | 2 |
-| **Total** | | **339** |
+| Corridor | Scenes | Vehicles | Share |
+|---|---:|---:|---:|
+| south I-5 (Centralia / Tacoma-Centralia) | 4 | 281 | 35.6 % |
+| Yakima-Toppenish (arid, eastern) | 4 | 126 | 16.0 % |
+| north I-5 (blaine-bellingham, Bellingham, Stanwood) | 5 | 114 | 14.4 % |
+| **Tri-Cities (I-82 / US-395, arid)** | 1 | **105** | 13.3 % |
+| I-90 auburn-snoqualmie | 2 | 66 | 8.4 % |
+| **Spokane (`20260622_...`)** | 1 | **55** | 7.0 % |
+| I-90 Ellensburg | 3 | 23 | 2.9 % |
+| polygon_01 (Kent/Auburn AOI) | 1 | 19 | 2.4 % |
+| **Total** | **21** | **789** | |
 
-**The diversity caveat:** ~91 % (307/339) is one region — greater Centralia / Tacoma south-I-5 (4 scenes of
-essentially the same corridor). The rest spans Ellensburg (I-90), Bellingham + Stanwood (north I-5). Volume is
-strong; diversity is concentrated, so the next labels are worth more on **new corridors** than more Centralia.
-**10 unlabeled scenes** (Seattle + 9 more Stanwood dates) are archived in `data/cold/`; the corpus is frozen
-until the Planet quota resets (see [CONTEXT.md](CONTEXT.md)).
+**Diversity, over time:** the largest single corridor was **91 %** at 339 vehicles, **45 %** at 629, and is now
+**35.6 %**. Tri-Cities is the first corridor with enough volume (105) to serve as a *measurable* spatial hold-out
+— the gap that made the `jitter-mv` run's spatial read worthless (2- and 6-vehicle hold-outs). All captures still
+fall in one spring window (**Apr 9 – Jun 22**), so clutter exposure is a single season — a stated limitation.
+`20260622_184442_88_2560_edit` is a raw Planet id, not a corridor name; it covers Spokane and likely re-captures
+the unlabeled `spokane-pullman_01_20260511` already in `data/active/imagery/`.
 
 ## Notes
 - **All imagery (`data/active/imagery/`, `data/cold/`), `data/active/coco/`, and `weights/` are gitignored**

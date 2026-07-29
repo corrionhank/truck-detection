@@ -5,6 +5,34 @@ Running log of what changed and what we learned. Newest first. For the current d
 
 ---
 
+## 2026-07-29 — Per-scene CRS: data → 789/21, first arid corridors (Tri-Cities, Spokane)
+
+- **Dropped the project-wide EPSG:32610 requirement from the training path.** The join only ever needed a
+  scene's points to agree with **its own** raster; "all of it must be 32610" was a generalization that WA's
+  geography (UTM 10/11 seam at 120°W) was always going to break. `export_coco.py` now reprojects points into
+  **each raster's native CRS** before the inverse affine — rasters are still never reprojected (resampling
+  smears the 1–3 px echo), points are, which is exact. Imagery from anywhere is now ingestible.
+- **Replaced the importer's CRS-equality gate with a functional per-scene check** (`align_to_imagery`): do the
+  points land inside their raster? That also catches a **mis-stamped CRS** — correct coordinates, wrong CRS
+  label — which an equality test reads as fine. Mis-stamps are re-stamped losslessly and reported.
+- **Imported `Annotations-New-7-29` → 789 vehicles / 21 scenes** (was 629/19). Both new scenes arrived
+  **mis-stamped** (EPSG:32610 label, EPSG:32611 values) and would previously have been silently excluded:
+  **`Tri-Cities-New_01` (105 veh)** — the first arid corridor big enough to be a *measurable* spatial hold-out —
+  and **`20260622_184442_88_2560_edit` (55 veh)**, a Spokane capture shipped under a raw Planet id. Largest
+  corridor share now **35.6 %** (was 45 % at 629, 91 % at 339).
+- **Fixed `verify_labels.py`**, which still assumed 64 px chips: it resized the 96 px chip to 512 (5.33×) while
+  scaling keypoints by 8, drawing every marker at 1.5× its true position. Read as a data error, was a drawing
+  bug. Scale is now derived from the chip; the `kp > 64` out-of-frame test was stale for the same reason.
+- Verified: 629/629 pre-existing chips **byte-identical** across both the code change and the re-import, exactly
+  160 added, 0 removed; new-scene keypoints centered at (48.0, 48.0) with collinearity 0.0–0.4 px and 0/24
+  auto-flags, echoes confirmed by overlay.
+- **Pre-training fixes in `train_detector.py`** (the two confounds from the `jitter-mv` post-mortem):
+  **`--warmup`** (default 300 iters, linear lr/100 → lr, covering the smoke iters) so the fresh detection heads
+  can be trained at the full 1e-3 instead of the flat 1e-4 that undertrained `jitter-mv`; and **best-val
+  checkpointing** — the lowest-val-loss epoch is kept and restored at the end (`jitter-mv` shipped epoch 12 at
+  val 4.955 when epoch 11 was 4.715), persisted through resume. Registry now records `warmup_iters`,
+  `best_val_epoch`, `best_val_loss`, `jitter_px`.
+
 ## 2026-07-26 — Trained `jitter-mv` (translation jitter + multi-vehicle chips) + model comparison
 
 - **New refinements built:** padded-chip **translation jitter** (`export_coco.py --margin`; 96 px chips

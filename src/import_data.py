@@ -10,10 +10,14 @@ inference (the console). This is the manual stand-in for the eventual app-to-app
 when that exists, point it at the same contract and this script becomes optional.
 
 Contract a valid annotation set must satisfy (the same join `export_coco.py` does):
-  - layer `Annotations` (or the file's only layer), Point geometry, EPSG:32610.
+  - layer `Annotations` (or the file's only layer), Point geometry, any projected CRS.
   - fields: `vehicle_id` (int), `sequence` (int in {1,2,3}), `scene` (text = GeoTIFF stem).
   - a vehicle = exactly 3 points (sequences 1,2,3); incomplete vehicles are dropped.
   - every `scene` must resolve to a GeoTIFF (in the inbox or already in active/imagery).
+  - each scene's points must land inside that scene's own GeoTIFF. That is the only CRS
+    requirement: per-scene agreement, not one zone for the whole project. Imagery stays in
+    its native CRS (reprojecting a raster resamples it and smears the echo); points are
+    reprojected to meet it, which is exact. Labels are stored canonically in EPSG:32610.
 
 Merge policy: **replace-by-scene** (default) — a dropped set is authoritative for the scenes
 it covers; existing rows for those scenes are replaced (so re-dropping a corrected set for a
@@ -75,8 +79,9 @@ def check_manifests():
         issues = []
         if m.get("format") != EXCHANGE_FORMAT:
             issues.append(f"format is {m.get('format')!r}, expected {EXCHANGE_FORMAT!r}")
-        if str(m.get("crs", "")).upper() not in ("EPSG:32610", "32610"):
-            issues.append(f"crs is {m.get('crs')!r}, expected EPSG:32610")
+        # `crs` is a single bundle-level field, but a bundle can legitimately span UTM zones
+        # (WA straddles 10/11), so it is advisory only. The binding check is per scene, in
+        # align_to_imagery(): every scene's points must land inside its own GeoTIFF.
         for item in m.get("imagery", []):
             if not (base / item["file"]).exists():
                 issues.append(f"declared imagery missing: {item['file']}")
@@ -152,6 +157,64 @@ def validate(gdf):
     return clean, issues
 
 
+def align_to_imagery(clean, scene_paths):
+    """Reconcile each scene's points against that scene's own GeoTIFF.
+
+    The join's real requirement is per-scene agreement between points and raster, not a
+    project-wide constant — WA spans UTM 10/11 and imagery from anywhere else is equally
+    usable. Rasters are never reprojected (resampling smears the 1-3 px echo); points are,
+    which is exact. Verifies functionally — do the points land inside the raster? — which
+    also catches a mis-stamped CRS (right numbers, wrong label), something a CRS-equality
+    test reads as fine and a name check never sees.
+
+    Returns (gdf stored in EPSG, notes[], dropped_scenes[]).
+    """
+    notes, drop = [], []
+    out = clean.copy()
+    for s in sorted(clean["scene"].unique()):
+        p = scene_paths.get(s)
+        if p is None:
+            continue                                    # orphan — reported by the caller
+        rows = out["scene"] == s
+        sub = out.loc[rows]
+        with rasterio.open(p) as src:
+            rcrs, b = src.crs, src.bounds
+        if rcrs is None:
+            notes.append(f"{s}: GeoTIFF carries no CRS — cannot verify the join")
+            continue
+
+        def inside(geom):
+            return int(((geom.x >= b.left) & (geom.x <= b.right) &
+                        (geom.y >= b.bottom) & (geom.y <= b.top)).sum())
+
+        n = len(sub)
+        hit = inside(sub.to_crs(rcrs).geometry)
+        if hit == n:
+            if rcrs.to_epsg() != EPSG:
+                notes.append(f"{s}: imagery is EPSG:{rcrs.to_epsg()}, points EPSG:{EPSG} — fine; "
+                             f"the export reprojects points per scene, the raster is untouched")
+            continue
+
+        # Points miss their own raster. Mis-stamped CRS? (correct values, wrong label)
+        raw = sub.set_crs(rcrs, allow_override=True)
+        raw_hit = inside(raw.geometry)
+        if raw_hit == n:
+            notes.append(f"{s}: MIS-STAMPED CRS — {n} points labelled EPSG:{sub.crs.to_epsg()} but "
+                         f"holding EPSG:{rcrs.to_epsg()} values. Re-stamped (no coordinates changed) "
+                         f"and stored as EPSG:{EPSG}")
+            out.loc[rows, "geometry"] = raw.to_crs(EPSG).geometry.values
+            continue
+
+        notes.append(f"{s}: points fall outside the GeoTIFF in every CRS tested "
+                     f"({hit}/{n} as EPSG:{sub.crs.to_epsg()}, {raw_hit}/{n} as EPSG:{rcrs.to_epsg()}) "
+                     f"— scene dropped, the join would produce wrong chips")
+        drop.append(s)
+
+    if drop:
+        out = out[~out["scene"].isin(drop)]
+    return out, notes, drop
+
+
 def main(a):
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     unpack_zips()                               # extract any .zip exchange bundles first
@@ -170,21 +233,11 @@ def main(a):
 
     inbox_scenes = {p.stem: p for p in tifs}
 
-    # --- imagery CRS gate: exclude scenes not in EPSG:32610 (never reproject a raster;
-    #     the point->pixel join assumes 32610, so a wrong-zone scene must not be ingested) ---
-    bad_crs = {}
-    for stem, p in list(inbox_scenes.items()):
-        with rasterio.open(p) as src:
-            epsg = src.crs.to_epsg() if src.crs else None
-        if epsg != EPSG:
-            bad_crs[stem] = epsg
-            del inbox_scenes[stem]
-    for stem, epsg in bad_crs.items():
-        print(f"\n  ! EXCLUDED {stem}: imagery CRS EPSG:{epsg} != {EPSG}. The join assumes {EPSG}; ingesting "
-              f"it would produce wrong chips. Its imagery + annotations are skipped — re-export in EPSG:32610.")
-
+    # Scenes keep their native CRS — the join is verified per scene against its own raster
+    # (align_to_imagery), not gated on a project-wide EPSG.
     existing = {p.stem for p in IMAGERY.glob("*.tif")}
     available = set(inbox_scenes) | existing
+    scene_paths = {p.stem: p for p in IMAGERY.glob("*.tif")} | dict(inbox_scenes)
 
     # --- validate annotation sets + join ---
     valid_sets = []
@@ -199,10 +252,16 @@ def main(a):
             continue
         orphans = sorted(s for s in clean["scene"].unique() if s not in available)
         for s in orphans:
-            why = f"imagery CRS != {EPSG} (excluded above)" if s in bad_crs else "no matching GeoTIFF (fix the name / drop the .tif)"
-            print(f"  ! scene {s}: {why} — its annotations are dropped")
+            print(f"  ! scene {s}: no matching GeoTIFF (fix the name / drop the .tif) "
+                  f"— its annotations are dropped")
         if orphans:
             clean = clean[~clean["scene"].isin(orphans)]
+        clean, crs_notes, crs_dropped = align_to_imagery(clean, scene_paths)
+        for msg in crs_notes:
+            print(f"  {'!' if 'dropped' in msg or 'MIS-STAMPED' in msg else '-'} {msg}")
+        if clean is None or len(clean) == 0:
+            print("  ! no annotations survived the per-scene join check — skipping this set")
+            continue
         for s in sorted(clean["scene"].unique()):
             print(f"  scene {s}: {clean[clean['scene'] == s]['vehicle_id'].nunique()} vehicles")
         if len(clean):

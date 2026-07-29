@@ -15,9 +15,10 @@ aggregation/annotation tool should produce — the ask is in
 ## What to drop
 
 - **Raw imagery** — PlanetScope SuperDove GeoTIFFs (`<Location>_<NN>_<YYYYMMDD>.tif`), 8-band
-  uint16 Surface Reflectance, **EPSG:32610, native grid (never reprojected)**. Needed for both
+  uint16 Surface Reflectance, **any CRS, native grid (never reprojected)**. Needed for both
   inference and (with annotations) training.
-- **Annotation sets** — a GeoPackage with a layer `Annotations`: Point geometry, EPSG:32610,
+- **Annotation sets** — a GeoPackage with a layer `Annotations`: Point geometry, any projected CRS
+  (**the stamped CRS must match the coordinates** — a mis-stamp is caught and reported at import),
   fields `vehicle_id` (int), `sequence` (int **1=blue, 2=red, 3=green**), `scene` (text = the
   GeoTIFF filename stem, e.g. `Centralia_01_20260511`). A vehicle = exactly 3 points.
 

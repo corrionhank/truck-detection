@@ -25,6 +25,7 @@ import geopandas as gpd
 import numpy as np
 import rasterio
 from PIL import Image
+from rasterio.warp import transform as warp_points
 
 REPO = Path(__file__).resolve().parent.parent
 GPKG = REPO / "data" / "active" / "Annotations-RGB.gpkg"
@@ -53,7 +54,8 @@ def apply_stretch(band, p_lo, span):
 
 
 def load_vehicles():
-    """Return {scene: {vehicle_id: [(seq, x, y), ...]}} for complete vehicles."""
+    """Return ({scene: {vehicle_id: [(seq, x, y), ...]}}, dropped, crs) for complete vehicles.
+    Coordinates stay in the GeoPackage's CRS; main() reprojects them per scene."""
     gdf = gpd.read_file(GPKG, layer="Annotations")
     gdf["scene"] = gdf["scene"].astype(str).str.strip()  # fix the whitespace bug
     gdf = gdf[gdf["scene"].str.len() > 0]                 # drop blank scenes
@@ -72,7 +74,7 @@ def load_vehicles():
                 kept[scene][vid] = sorted(pts)
             else:
                 dropped += 1
-    return kept, dropped
+    return kept, dropped, gdf.crs
 
 
 def _annotation(px, x0, y0, export, ann_id, img_id, vid, is_center):
@@ -101,11 +103,11 @@ def main(chip, margin, out_dir, single):
     img_dir = out_dir / "images"
     img_dir.mkdir(exist_ok=True)
 
-    by_scene, dropped = load_vehicles()
+    by_scene, dropped, src_crs = load_vehicles()
 
     images, annotations = [], []
     img_id = ann_id = 0
-    n_vehicles = n_neighbors = 0
+    n_vehicles = n_neighbors = n_reprojected = 0
 
     for scene in sorted(by_scene):
         tif = GEOTIFF_DIR / f"{scene}.tif"
@@ -121,9 +123,25 @@ def main(chip, margin, out_dir, single):
             W, H = src.width, src.height
             inv = ~src.transform
 
+            # The join only requires that a scene's points agree with ITS OWN raster — not that
+            # the whole project sits in one UTM zone (WA straddles 10/11, and imagery from
+            # anywhere is equally usable). So the raster stays in its native CRS — reprojecting
+            # it would resample and smear the 1-3 px echo, which is the entire signal — and the
+            # labels move instead. Reprojecting points is exact arithmetic on coordinates, and
+            # past this line everything is pixel space, so CRS is gone from the pipeline.
+            scene_pts = by_scene[scene]
+            if src_crs is not None and src.crs is not None and src_crs != src.crs:
+                flat = [(vid, seq, x, y) for vid, v in scene_pts.items() for seq, x, y in v]
+                xs, ys = warp_points(src_crs, src.crs, [f[2] for f in flat], [f[3] for f in flat])
+                moved = defaultdict(list)
+                for (vid, seq, _, _), x, y in zip(flat, xs, ys):
+                    moved[vid].append((seq, x, y))
+                scene_pts = {vid: sorted(v) for vid, v in moved.items()}
+                n_reprojected += 1
+
             # pixel keypoints per vehicle (blue/red/green order) — reused for the neighbour lookup
             veh_px = {vid: [(inv * (x, y)) for _, x, y in pts]
-                      for vid, pts in by_scene[scene].items()}
+                      for vid, pts in scene_pts.items()}
 
             for vid in sorted(by_scene[scene]):
                 px = veh_px[vid]
@@ -175,7 +193,9 @@ def main(chip, margin, out_dir, single):
     out.write_text(json.dumps(coco, indent=2))
 
     mode = "single-vehicle" if single else f"multi-vehicle (+{n_neighbors} neighbour annotations)"
-    print(f"scenes with labels : {len(by_scene)}")
+    print(f"scenes with labels : {len(by_scene)}"
+          + (f"  ({n_reprojected} in a different CRS — points reprojected, rasters untouched)"
+             if n_reprojected else ""))
     print(f"chips (1/vehicle)  : {n_vehicles}  (incomplete dropped: {dropped})")
     print(f"export             : {export}x{export} px (chip {chip} + 2*margin {margin}) · {mode}")
     print(f"chips dir          : {img_dir}")

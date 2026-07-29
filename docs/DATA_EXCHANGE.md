@@ -50,14 +50,15 @@ folder (or the `.zip`) into `data/inbox/` and run the importer.
 | `version` | ✅ | schema version (currently `1`) |
 | `created` | ✅ | ISO-8601 timestamp |
 | `source` | – | who produced it (provenance) |
-| `crs` | ✅ | must be `"EPSG:32610"` |
+| `crs` | – | advisory only. A bundle may span UTM zones (WA straddles 10/11), which one field can't express; the binding check is per scene (rule 2). |
 | `imagery[]` | – | `{scene, file}` per GeoTIFF (relative path). Omit/`[]` for annotations-only. |
 | `annotations` | – | `{file, layer, vehicles, keypoints}` — **counts are the handshake**. Omit for imagery-only. |
 | `notes` | – | free text |
 
 ## The `annotations.gpkg` layer (unchanged from the internal schema)
 
-Layer **`Annotations`**, geometry **Point**, CRS **EPSG:32610**, one row per keypoint:
+Layer **`Annotations`**, geometry **Point**, any projected CRS (stored canonically as **EPSG:32610** after
+import), one row per keypoint. **The CRS you stamp must be the CRS the coordinates are actually in** — see rule 2:
 
 | Field | Type | Rule |
 |---|---|---|
@@ -71,8 +72,12 @@ A vehicle = exactly 3 points (sequences 1,2,3); incomplete vehicles are dropped 
 
 1. **`scene` must resolve to a GeoTIFF** — either shipped in the same bundle or already imported. The importer
    reports orphaned scenes and skips them; it never drops labels silently.
-2. **EPSG:32610 everywhere.** Annotation *points* are reprojected to 32610 if needed (safe). A **raster** in the
-   wrong CRS is flagged, never reprojected — resampling would smear the moving-echo signal.
+2. **Per-scene CRS agreement — not one zone for the whole project.** The join only needs a scene's points and
+   *its own* raster to agree. Imagery stays in its **native CRS** (reprojecting a raster resamples it and smears
+   the echo); points are reprojected per scene at export, which is exact. So a bundle may mix zones freely, and
+   imagery from outside WA is equally ingestible. The importer verifies this **functionally** — do the points
+   land inside their raster? — which also catches a **mis-stamped CRS** (correct coordinates, wrong CRS label),
+   the one failure a CRS-equality test reads as fine. A mis-stamp is re-stamped losslessly and reported.
 3. **The manifest counts must match the file** (`vehicles` / `keypoints`). A mismatch fails the handshake so a
    truncated or wrong export is caught before it pollutes the training set.
 4. **Merge is replace-by-scene** on import: a bundle is authoritative for the scenes it covers; the active gpkg
@@ -91,8 +96,9 @@ manifest, **no annotations**.
   `data/active/imagery/` for the Inference tab and **never touches the training set**. Imported scenes read
   "UNSEEN" for every model.
 
-So there are two exports on the same base format: the **training bundle** (imagery + annotations, EPSG:32610 →
-`import_data.py`) and the **inference bundle** (imagery only, any CRS → `import_scenes.py`). The full request to
+So there are two exports on the same base format: the **training bundle** (imagery + annotations →
+`import_data.py`) and the **inference bundle** (imagery only → `import_scenes.py`). **Both accept any CRS**;
+training additionally requires each scene's points to agree with its own raster (rule 2). The full request to
 the hub is in [EXPORT_REQUEST.md](EXPORT_REQUEST.md).
 
 ## Producing a bundle (the hub side)

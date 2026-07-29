@@ -271,8 +271,19 @@ def pick_device(prefer="auto"):
     return torch.device("cpu")
 
 
+def warmup_lr(opt, step, total, base):
+    """Linear LR ramp base/100 -> base over the first `total` optimiser steps, then hands off to
+    ReduceLROnPlateau. The fresh detection heads spike at full LR from iteration 1 (jitter-mv's
+    smoke test went loss 9 -> 528 at 1e-3), which is why that run dropped to a flat 1e-4 — and a
+    flat low LR undertrains, confounding its precision drop. Warmup avoids both."""
+    if total <= 0 or step >= total:
+        return
+    for g in opt.param_groups:
+        g["lr"] = base * (0.01 + 0.99 * (step + 1) / total)
+
+
 def train(train_items, val_items, arch, epochs, batch, lr, repeat, seed, ckpt_path, aug_on=True,
-          device=None, jitter=None):
+          device=None, jitter=None, warmup=0):
     torch.manual_seed(seed)
     device = device or pick_device()
     print(f"  training on: {device.type}", flush=True)
@@ -282,7 +293,8 @@ def train(train_items, val_items, arch, epochs, batch, lr, repeat, seed, ckpt_pa
     vdl = DataLoader(ChipDS(val_items, 1, seed + 1, aug=False), batch_size=batch,
                      shuffle=False, collate_fn=collate, num_workers=0)
 
-    start_ep = 1
+    start_ep, step = 1, 0
+    best = {"vloss": float("inf"), "epoch": None, "state": None}
     if ckpt_path.exists():
         # resume: the checkpoint already holds trained weights (skip the pretrained download)
         ck = torch.load(ckpt_path, map_location="cpu")
@@ -296,7 +308,11 @@ def train(train_items, val_items, arch, epochs, batch, lr, repeat, seed, ckpt_pa
         sched = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, mode="min", factor=0.3, patience=2, min_lr=1e-5)
         sched.load_state_dict(ck["sched"])
         start_ep = ck["epoch"] + 1
-        print(f"resumed from checkpoint @ epoch {ck['epoch']} -> continuing at {start_ep}", flush=True)
+        best = ck.get("best", best)
+        step = warmup                                                      # warmup already served
+        print(f"resumed from checkpoint @ epoch {ck['epoch']} -> continuing at {start_ep}"
+              + (f" (best val {best['vloss']:.3f} @ epoch {best['epoch']})" if best["epoch"] else ""),
+              flush=True)
     else:
         # fresh start: inject the COCO-pretrained backbone, then a 2-iter smoke (fail fast)
         pre = keypointrcnn_resnet50_fpn(weights="DEFAULT")
@@ -305,8 +321,11 @@ def train(train_items, val_items, arch, epochs, batch, lr, repeat, seed, ckpt_pa
         opt = torch.optim.Adam(model.parameters(), lr=lr)                  # Adam
         sched = torch.optim.lr_scheduler.ReduceLROnPlateau(                # ReduceLROnPlateau
             opt, mode="min", factor=0.3, patience=2, min_lr=1e-5)
+        if warmup:
+            print(f"  LR warmup: {lr/100:.1e} -> {lr:.1e} over {warmup} iters", flush=True)
         model.train()
         for j, (imgs, tgts) in enumerate(dl):
+            warmup_lr(opt, step, warmup, lr); step += 1                    # smoke runs warmed too
             imgs, tgts = _to(imgs, tgts, device)
             loss = sum(model(imgs, tgts).values())
             opt.zero_grad(); loss.backward()
@@ -319,6 +338,7 @@ def train(train_items, val_items, arch, epochs, batch, lr, repeat, seed, ckpt_pa
         model.train()
         tot, n = 0.0, 0
         for imgs, tgts in dl:
+            warmup_lr(opt, step, warmup, lr); step += 1
             imgs, tgts = _to(imgs, tgts, device)
             loss = sum(model(imgs, tgts).values())                         # composite loss
             if not torch.isfinite(loss):
@@ -335,14 +355,25 @@ def train(train_items, val_items, arch, epochs, batch, lr, repeat, seed, ckpt_pa
                     vtot += float(vl); vn += 1
         vloss = vtot / max(vn, 1)
         sched.step(vloss)                                                  # step on val loss
+        cpu_state = {k: v.detach().cpu() for k, v in model.state_dict().items()}
+        improved = vloss < best["vloss"]
+        if improved:                                                       # keep the BEST epoch, not the last
+            best = {"vloss": vloss, "epoch": ep, "state": {k: v.clone() for k, v in cpu_state.items()}}
         print(f"epoch {ep:2d}/{epochs}  train_loss={tot/max(n,1):.3f}  "
-              f"val_loss={vloss:.3f}  lr={opt.param_groups[0]['lr']:.2e}", flush=True)
+              f"val_loss={vloss:.3f}  lr={opt.param_groups[0]['lr']:.2e}"
+              + ("  *best*" if improved else ""), flush=True)
         # checkpoint every epoch (model on CPU for portability) so a kill costs one epoch
-        torch.save({"epoch": ep, "model": {k: v.detach().cpu() for k, v in model.state_dict().items()},
-                    "opt": opt.state_dict(), "sched": sched.state_dict()}, ckpt_path)
+        torch.save({"epoch": ep, "model": cpu_state, "opt": opt.state_dict(),
+                    "sched": sched.state_dict(), "best": best}, ckpt_path)
+    # Ship the lowest-val-loss epoch. jitter-mv shipped epoch 12 (val 4.955) when epoch 11 was
+    # better (4.715) — there was no best-val checkpoint, so the registered weights were past peak.
+    if best["state"] is not None:
+        model.load_state_dict(best["state"])
+        print(f"\nbest-val weights: epoch {best['epoch']}/{epochs} (val {best['vloss']:.3f})"
+              + ("" if best["epoch"] == epochs else "  <- final epoch was worse; restored"), flush=True)
     model.eval()
     model.to("cpu")                                                        # eval + save on CPU (detect_scene builds CPU tensors)
-    return model
+    return model, best
 
 
 # ----------------------------------------------------------- register + card
@@ -508,8 +539,9 @@ def main(a):
     device = pick_device(a.device)
     ckpt_path = REPO / "weights" / f"{a.id}.ckpt.pt"
     (REPO / "weights").mkdir(exist_ok=True)
-    model = train(train_items, val_items, arch, a.epochs, a.batch, a.lr, a.repeat, a.seed, ckpt_path,
-                  aug_on=(a.aug != "none"), device=device, jitter=(None if a.jitter < 0 else a.jitter))
+    model, best = train(train_items, val_items, arch, a.epochs, a.batch, a.lr, a.repeat, a.seed, ckpt_path,
+                        aug_on=(a.aug != "none"), device=device,
+                        jitter=(None if a.jitter < 0 else a.jitter), warmup=a.warmup)
 
     # evaluate each held-out scene independently — the honest, untrained test set
     per_scene, f1s, cens = {}, [], []
@@ -552,7 +584,10 @@ def main(a):
                  "anchor_sizes": arch["anchor_sizes"], "aspect_ratios": arch["aspect_ratios"],
                  "classes": 2, "keypoints": 3, "min_size": a.min_size, "max_size": a.max_size},
         "train": {"vehicles": len(train_items), "scenes": train_scenes, "epochs": a.epochs,
-                  "batch": a.batch, "lr": a.lr,
+                  "batch": a.batch, "lr": a.lr, "warmup_iters": a.warmup,
+                  "best_val_epoch": best["epoch"],
+                  "best_val_loss": round(best["vloss"], 4) if best["epoch"] else None,
+                  "jitter_px": (None if a.jitter < 0 else a.jitter),
                   "aug": "rotate+flip+brightness+perspective (Adamiak)" if a.aug != "none" else "none",
                   "finetune": "COCO-pretrained backbone (weights=DEFAULT)",
                   "device": device.type, "script": "src/train_detector.py"},
@@ -600,6 +635,9 @@ if __name__ == "__main__":
     p.add_argument("--epochs", type=int, default=12)
     p.add_argument("--batch", type=int, default=4)
     p.add_argument("--lr", type=float, default=1e-3)
+    p.add_argument("--warmup", type=int, default=300,
+                   help="linear LR warmup iters (lr/100 -> lr) before ReduceLROnPlateau takes over; "
+                        "0 disables. Lets the fresh heads settle at full lr instead of spiking")
     p.add_argument("--repeat", type=int, default=3, help="augmented samples per vehicle per epoch")
     p.add_argument("--jitter", type=int, default=-1,
                    help="max crop-translation px (default: derive from chip margin; 0 = center-crop ablation control)")

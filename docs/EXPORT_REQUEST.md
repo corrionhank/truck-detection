@@ -46,8 +46,9 @@ If those hold, import is mechanical. The rest of this doc is the *why* and the *
 - Capture, per scene, the sidecar metadata (`*_metadata.json`) — we need it later for velocity (see below).
 
 ### Clipping
-- Clip to the corridor, but keep the raster on its **native grid in EPSG:32610** — do **not** resample, warp,
-  or change resolution. Keep all **8 bands, uint16**. Nodata = 0 outside the clip is fine.
+- Clip to the corridor, but keep the raster on its **native grid in its native CRS** — do **not** resample, warp,
+  reproject, or change resolution. Keep all **8 bands, uint16**. Nodata = 0 outside the clip is fine.
+  Any UTM zone is fine; eastern-WA scenes (east of 120°W) are **EPSG:32611** and should stay that way.
 - Output one GeoTIFF per scene, named `<Location>_<NN>_<YYYYMMDD>.tif`.
 
 ### Annotation
@@ -60,8 +61,17 @@ assumes WGS84 and will silently misread 32610 metres):
 | `sequence` | int | **1 = blue, 2 = red, 3 = green** — place point 1 on the blue blob, 2 on red, 3 on green |
 | `scene` | text | **exactly** the GeoTIFF stem |
 
-Geometry **Point** (not MultiPoint), CRS **EPSG:32610**, **exactly 3 points per vehicle**. If you label in
-pixel space (`L.CRS.Simple`) and apply the affine at save (recommended), watch the fidelity foot-guns:
+Geometry **Point** (not MultiPoint), **exactly 3 points per vehicle**, in **the same CRS as that scene's
+GeoTIFF** (or any CRS, correctly stamped — we reproject per scene, which is exact).
+
+> ⚠️ **Known bug, seen in `Annotations-New-7-29` (2026-07-29):** the two eastern-WA scenes shipped with the
+> layer stamped `EPSG:32610` while the coordinates were **EPSG:32611** values. A single bundle-level `crs`
+> field can't describe a mixed-zone bundle, and stamping everything 32610 makes zone-11 points *look* valid —
+> nothing errors, the labels just land in the wrong place. **Stamp the CRS the coordinates are actually in.**
+> If a bundle spans zones, the gpkg needs either per-scene layers or points genuinely reprojected to one CRS.
+
+If you label in pixel space (`L.CRS.Simple`) and apply the affine at save (recommended), watch the fidelity
+foot-guns:
 
 1. **Y-flip.** Raster pixel space has **row 0 at the top, increasing downward**; a math canvas has y increasing
    upward. Read `row` as pixels-**from-top**, or every keypoint comes out vertically mirrored. In the save

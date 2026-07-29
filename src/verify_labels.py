@@ -82,8 +82,12 @@ def main(a):
     if not picks:
         raise SystemExit(f"no chips found for {scenes}. available: {sorted(by)}")
 
-    SCALE, GAP, cols = 8, 8, 6
-    cw = 64 * SCALE
+    # Chip size comes from the export (64 legacy, 96 with --margin 16). Derive the keypoint
+    # scale from it — hardcoding it desynchronises the markers from the image and draws every
+    # point offset from its true position, which reads as a data error but is a drawing bug.
+    src_px = Image.open(picks[0][1]).size[0]
+    GAP, cols, cw = 8, 6, 512
+    SCALE = cw / src_px
     tw, th = cw + GAP, cw + GAP + 30
     rows = math.ceil(len(picks) / cols)
     montage = Image.new("RGB", (cols * tw + GAP, rows * th + GAP), (16, 16, 20))
@@ -100,7 +104,7 @@ def main(a):
             d.ellipse([px - 7, py - 7, px + 7, py + 7], outline=KP_COLORS[j], width=3)
 
         col = collinearity_px(kp)
-        oob = bool((kp < 0).any() or (kp > 64).any())        # keypoint outside the chip
+        oob = bool((kp < 0).any() or (kp > src_px).any())    # keypoint outside the chip
         suspicious = col > 4.0 or oob
         flags += suspicious
         r0, c0 = k // cols, k % cols

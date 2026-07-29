@@ -94,7 +94,10 @@ Caveat: the near-perfect count is error cancellation (~30 TP + 13 FP ≈ 42), no
 
 ## 7. Correctness landmines
 - Join labels↔imagery by the **`scene` text field, never spatial extent**.
-- **EPSG:32610** for training imagery; inference any UTM zone. Never resample/reproject (smears the echo).
+- **Any CRS, training or inference** — the join needs each scene's points to agree with *its own* raster, not one
+  zone project-wide (WA spans UTM 10/11). Never resample/reproject a **raster** (smears the echo); reproject
+  **points** freely (exact). Watch for a **mis-stamped** CRS — right coordinates, wrong label — which passes a
+  CRS-equality check; `import_data.align_to_imagery` tests it functionally and re-stamps losslessly.
 - Only `data/active/Annotations-RGB.gpkg` is git-tracked; imagery/weights/coco/outputs gitignored.
 - Anchors must match at load (registry handles it).
 - Name-based split leakage guard **misses spatial overlap** (§3) — a real spatial guard is needed.
