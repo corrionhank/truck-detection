@@ -1,6 +1,6 @@
 {
   "_comment": "Model registry / experiment log. Each entry records how a model was trained, its results, and findings. Weights live in weights/ (gitignored, large); this JSON (metadata + notes) is committed so past efforts are recoverable. 'active' = the model the Inference tab / backend runs by default. status: active | archived. Edit notes freely, or via the Models tab.",
-  "active": "kprcnn-adamiak-all",
+  "active": "kprcnn-warmup-v1",
   "models": [
     {
       "id": "kprcnn-echo-v0",
@@ -397,7 +397,7 @@
       "id": "kprcnn-adamiak-all",
       "name": "Keypoint R-CNN (Adamiak, all 16 scenes)",
       "weights": "kprcnn-adamiak-all.pt",
-      "status": "active",
+      "status": "archived",
       "created": "2026-07-24",
       "card": "cards/kprcnn-adamiak-all.md",
       "arch": {
@@ -572,6 +572,96 @@
         "heldout_f1_mean": 0.312
       },
       "notes": "Adamiak-spec detector (finetuned backbone, 64px chips, small anchors). Trained on 14 scenes, tested on 4 untrained held-out scene(s): Centralia_01_20260511, Tacoma-Centralia_01_20260429, EllensburgPreferredTest_01_20260530, Stanwood_10_20260511. See the card for per-scene results."
+    },
+    {
+      "id": "kprcnn-warmup-v1",
+      "name": "Keypoint R-CNN (jitter+MV, LR warmup, 20-scene)",
+      "weights": "kprcnn-warmup-v1.pt",
+      "status": "active",
+      "created": "2026-07-29",
+      "card": "cards/kprcnn-warmup-v1.md",
+      "arch": {
+        "backbone": "resnet50-fpn",
+        "anchors": "custom",
+        "anchor_sizes": [
+          4,
+          8,
+          16,
+          32,
+          48
+        ],
+        "aspect_ratios": [
+          0.25,
+          0.5,
+          0.75,
+          1.0,
+          1.25
+        ],
+        "classes": 2,
+        "keypoints": 3,
+        "min_size": 192,
+        "max_size": 320
+      },
+      "train": {
+        "vehicles": 624,
+        "scenes": [
+          "Bellingham_01_20260425",
+          "Centralia_01_20260511",
+          "Centralia_02_20260511",
+          "Ellensburg-Yakima_01_20260409",
+          "EllensburgPreferredTest_01_20260530",
+          "Ellensburg_01_20260504",
+          "Stanwood_10_20260511",
+          "Tacoma-Centralia_02_20260602",
+          "Tri-Cities-New_01_20260611",
+          "Yakima-Toppenish_01_20260503",
+          "Yakima-Toppenish_02_20260509",
+          "Yakima-Toppenish_03_20260614",
+          "Yakima-Toppenish_04_20260620",
+          "auburn-snoqualmie_01_20260425",
+          "auburn-snoqualmie_03_20260614",
+          "blaine-bellingham_01_20260425",
+          "blaine-bellingham_02_20260528",
+          "blaine-bellingham_03_20260504",
+          "polygon_01_20260503",
+          "spokane-i90_01_20260622"
+        ],
+        "epochs": 16,
+        "batch": 4,
+        "lr": 0.001,
+        "warmup_iters": 300,
+        "best_val_epoch": 16,
+        "best_val_loss": 4.4943,
+        "jitter_px": null,
+        "aug": "rotate+flip+brightness+perspective (Adamiak)",
+        "finetune": "COCO-pretrained backbone (weights=DEFAULT)",
+        "device": "cpu",
+        "script": "src/train_detector.py"
+      },
+      "metrics": {
+        "heldout_scenes": [
+          "Tacoma-Centralia_01_20260429"
+        ],
+        "heldout_split_type": {
+          "Tacoma-Centralia_01_20260429": "temporal"
+        },
+        "eval_thresh": 0.3,
+        "per_scene": {
+          "Tacoma-Centralia_01_20260429": {
+            "vehicles": 80,
+            "centered_recall": 1.0,
+            "kp_err_px": 1.19,
+            "recall": 0.45,
+            "precision": 0.3,
+            "f1": 0.36,
+            "detected": 120,
+            "labelled": 80
+          }
+        },
+        "heldout_recall_centered_mean": 1.0,
+        "heldout_f1_mean": 0.36
+      },
+      "notes": "Adamiak-spec detector (finetuned backbone, 64px chips, small anchors). Trained on 20 scenes, tested on 1 untrained held-out scene(s): Tacoma-Centralia_01_20260429. See the card for per-scene results."
     }
   ]
 }

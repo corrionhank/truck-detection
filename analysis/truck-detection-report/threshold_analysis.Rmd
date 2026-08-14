@@ -1,0 +1,252 @@
+---
+title: "Choosing the confidence threshold"
+subtitle: "Where each model actually performs best — and why raising the threshold does not fix over-counting"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+    toc_depth: 2
+    number_sections: true
+    theme: flatly
+    df_print: kable
+    fig_width: 10
+    fig_height: 6
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                      dpi = 150, fig.retina = 2)
+```
+
+```{r libraries}
+suppressPackageStartupMessages({
+  library(readr); library(dplyr); library(tidyr); library(tibble)
+  library(ggplot2); library(forcats); library(scales)
+})
+MODELS <- c(MODEL_A = "adamiak-v2", MODEL_B = "warmup-v1")
+PAL    <- c("adamiak-v2" = "#2a78d6", "warmup-v1" = "#eb6834")
+
+theme_td <- function(base = 11) {
+  theme_minimal(base_size = base) +
+    theme(panel.grid.minor = element_blank(),
+          plot.title    = element_text(face = "bold", size = base + 2),
+          plot.subtitle = element_text(colour = "grey35", size = base - 1),
+          plot.caption  = element_text(colour = "grey45", size = base - 2, hjust = 0),
+          strip.text    = element_text(face = "bold"),
+          legend.position = "top", legend.title = element_blank())
+}
+theme_set(theme_td())
+
+sweep <- read_csv("data/threshold_sweep.csv", show_col_types = FALSE) |>
+  mutate(model = recode(model, !!!MODELS), model = factor(model, levels = unname(MODELS)))
+results <- read_csv("data/results.csv", show_col_types = FALSE) |>
+  mutate(model = recode(model, !!!MODELS), model = factor(model, levels = unname(MODELS)))
+
+peaks  <- sweep |> group_by(model) |> slice_max(mean_F1, n = 1) |> ungroup()
+parity <- sweep |> group_by(model) |> slice_min(abs(count_ratio - 1), n = 1) |> ungroup()
+```
+
+# The question
+
+The confidence threshold is a free parameter. It does not change what the model detects — only which detections
+survive into the output — so it can be chosen after training, at no cost, and changed at any time.
+
+Model B (`warmup-v1`) over-counts badly at the thresholds originally sampled: at 0.3 it returns roughly
+**2.9 detections for every labelled vehicle**. The obvious remedy is to raise the threshold until the excess
+disappears. The natural question is how far to go, and whether something near the top of the range — 0.9 or
+0.95 — would both remove the over-counting and maximise accuracy.
+
+This document answers that by sweeping the threshold from 0.30 to 0.975 in 0.025 steps for both models. No
+re-inference was needed: every detection was stored with its score, so the sweep is a filter over records
+already on disk.
+
+# The short answer
+
+**No — 0.95 is far too high for either model.** F1 peaks well below it and falls away steeply, and the
+over-counting is replaced by severe under-counting rather than corrected.
+
+```{r headline-answer}
+sweep |>
+  filter(threshold %in% c(0.30, 0.50, 0.65, 0.775, 0.85, 0.95)) |>
+  select(model, threshold, mean_F1, pooled_F1, pooled_P, pooled_R, count_ratio) |>
+  arrange(model, threshold) |>
+  mutate(across(-c(model, threshold), \(x) round(x, 3)))
+```
+
+At 0.95, model B finds **fewer than a third** of the labelled trucks and model A finds about **one in twenty**.
+Both are worse on F1 than they are at 0.3.
+
+# The full sweep
+
+```{r fig-sweep, fig.height=5.6, fig.width=11}
+sweep |>
+  select(model, threshold, `mean F1` = mean_F1, `count ratio` = count_ratio) |>
+  pivot_longer(c(`mean F1`, `count ratio`), names_to = "metric", values_to = "value") |>
+  ggplot(aes(threshold, value, colour = model)) +
+  geom_hline(data = tibble(metric = "count ratio", y = 1), aes(yintercept = y),
+             linetype = "dashed", colour = "grey40") +
+  geom_line(linewidth = 1) +
+  geom_point(data = peaks |> transmute(model, threshold, value = mean_F1, metric = "mean F1"),
+             size = 3.4, shape = 21, stroke = 1.5, fill = "white") +
+  geom_point(data = parity |> transmute(model, threshold, value = count_ratio, metric = "count ratio"),
+             size = 3.4, shape = 21, stroke = 1.5, fill = "white") +
+  facet_wrap(~ metric, scales = "free_y") +
+  scale_colour_manual(values = PAL) +
+  labs(title = "F1 and count ratio across the confidence range",
+       subtitle = "Circles mark each model's F1 peak (left) and its count-parity point (right).",
+       x = "confidence threshold", y = NULL,
+       caption = "Dashed line on the right panel is count parity — detections equal to labelled vehicles.")
+```
+
+Both F1 curves are single-peaked. They rise as spurious detections are filtered out, turn over once real
+detections start being filtered too, and then fall away sharply. The count ratio declines monotonically and
+crosses parity at a different threshold from the F1 peak — the two objectives do not coincide.
+
+# Where each model should run
+
+```{r operating-points}
+bind_rows(
+  peaks  |> transmute(model, purpose = "maximise F1", threshold,
+                      mean_F1 = round(mean_F1, 3), pooled_F1 = round(pooled_F1, 3),
+                      pooled_P = round(pooled_P, 3), pooled_R = round(pooled_R, 3),
+                      count_ratio = round(count_ratio, 2)),
+  parity |> transmute(model, purpose = "match the count", threshold,
+                      mean_F1 = round(mean_F1, 3), pooled_F1 = round(pooled_F1, 3),
+                      pooled_P = round(pooled_P, 3), pooled_R = round(pooled_R, 3),
+                      count_ratio = round(count_ratio, 2))
+) |> arrange(model, desc(purpose))
+```
+
+**Neither model was being run at its best setting.** Model A peaks at **0.55** and model B at **0.65** — both
+above the 0.5 the console defaults to, and well below the 0.85 that was sampled as the high end.
+
+The two models reach count parity in very different places: model A at **0.45**, model B at **0.775**. That gap
+is a direct measure of how much more freely B fires — it needs a far stricter cutoff to produce the same number
+of detections.
+
+## F1 optimum versus count parity
+
+For model A the two objectives nearly coincide (0.55 and 0.45), so a single threshold serves both. For model B
+they are far apart (0.65 and 0.775), and the choice depends on the deliverable:
+
+```{r tradeoff-b}
+sweep |>
+  filter(model == "warmup-v1", threshold %in% c(0.65, 0.70, 0.75, 0.775, 0.80)) |>
+  select(threshold, mean_F1, pooled_P, pooled_R, count_ratio) |>
+  mutate(across(everything(), \(x) round(x, 3)))
+```
+
+Moving model B from its F1 optimum (0.65) to its parity point (0.775) costs only **0.015 mean F1** while taking
+the count ratio from 1.49 to 1.03. For a deliverable that reports aggregate truck counts, that is a good trade:
+a near-unbiased counter for almost no loss in detection quality.
+
+# Why raising the threshold cannot fix over-counting
+
+Raising the threshold removes detections indiscriminately — it cannot distinguish a spurious detection from a
+real one, only a low-scoring one from a high-scoring one. Because real and spurious detections overlap heavily
+in score, filtering away the spurious ones necessarily takes real ones with them.
+
+```{r fig-pr-tradeoff, fig.height=5.4, fig.width=10}
+sweep |>
+  select(model, threshold, Precision = pooled_P, Recall = pooled_R, F1 = pooled_F1) |>
+  pivot_longer(c(Precision, Recall, F1), names_to = "metric", values_to = "value") |>
+  mutate(metric = factor(metric, levels = c("Precision", "Recall", "F1"))) |>
+  ggplot(aes(threshold, value, colour = model)) +
+  geom_line(linewidth = 1) +
+  facet_wrap(~ metric, nrow = 1) +
+  scale_colour_manual(values = PAL) +
+  scale_y_continuous(limits = c(0, 1), labels = percent_format(accuracy = 1)) +
+  labs(title = "Precision rises, recall falls, F1 turns over",
+       subtitle = "Pooled across all 21 labelled scenes.",
+       x = "confidence threshold", y = NULL,
+       caption = "Past each model's peak, recall is lost faster than precision is gained.")
+```
+
+Precision climbs steadily with the threshold and recall declines steadily. F1 combines them, so it rises only
+while the precision gain outweighs the recall loss. Past the peak the balance inverts, and by 0.95 both models
+have given up far more real detections than spurious ones.
+
+Model A's collapse is the more extreme: its scores are concentrated lower, so a 0.95 cutoff removes almost
+everything it produces.
+
+# Consistency is not the same as accuracy
+
+Spread keeps improving as the threshold rises, even where accuracy is collapsing.
+
+```{r fig-sd, fig.height=5, fig.width=9}
+sweep |>
+  ggplot(aes(threshold, SD_F1, colour = model)) +
+  geom_line(linewidth = 1) +
+  geom_point(data = peaks, size = 3.2, shape = 21, stroke = 1.4, fill = "white") +
+  scale_colour_manual(values = PAL) +
+  labs(title = "Standard deviation of per-scene F1 across the confidence range",
+       subtitle = "Circles mark each model's F1 peak. Lower SD is not automatically better.",
+       x = "confidence threshold", y = "SD of per-scene F1",
+       caption = "A model that detects almost nothing scores consistently badly — low spread, no value.")
+```
+
+This is worth stating explicitly because low variance was earlier identified as one of model B's strengths.
+That reading holds where accuracy is reasonable, but variance alone is not a quality measure: at 0.95 model B's
+F1 standard deviation is among its lowest while its F1 is near its worst.
+
+# Effect on the model comparison
+
+Re-running the head-to-head at each model's own optimum rather than a shared threshold narrows the gap:
+
+```{r fig-at-optimum, fig.height=7, fig.width=10}
+opt <- tibble(model = factor(c("adamiak-v2", "warmup-v1"), levels = unname(MODELS)),
+              threshold = c(0.55, 0.65))
+
+# nearest sampled thresholds available in results.csv
+at_opt <- results |>
+  filter((model == "adamiak-v2" & threshold == 0.5) | (model == "warmup-v1" & threshold == 0.65))
+
+at_opt |>
+  mutate(scene_id = fct_reorder(scene_id, annotated_count)) |>
+  ggplot(aes(f1, scene_id, fill = model)) +
+  geom_col(position = position_dodge(width = 0.76), width = 0.7) +
+  scale_fill_manual(values = PAL) +
+  labs(title = "Per-scene F1 with each model at its own best threshold",
+       subtitle = "adamiak-v2 at 0.50, warmup-v1 at 0.65. Scenes ordered by annotation count.",
+       x = "F1", y = NULL,
+       caption = "Comparing models at a shared threshold penalises whichever one is further from its optimum.")
+```
+
+```{r optimum-summary}
+at_opt |>
+  group_by(model, threshold) |>
+  summarise(mean_F1 = round(mean(f1), 3), SD_F1 = round(sd(f1), 3),
+            mean_P = round(mean(precision), 3), mean_R = round(mean(recall), 3),
+            median_count_ratio = round(median(count_ratio), 2), .groups = "drop")
+```
+
+Model A remains ahead on mean F1, but the margin is smaller than the shared-threshold comparison suggested, and
+model B is closer to count parity at its own optimum than A is at the threshold the console currently uses.
+
+# Recommendations
+
+1. **Stop running either model at 0.5 by default.** It is below both optima and was inherited rather than chosen.
+2. **For detection quality:** run model A at **0.55**, model B at **0.65**.
+3. **For counting:** run model A at **0.45**, model B at **0.775**. Model B loses only 0.015 F1 moving to parity.
+4. **Do not go above ~0.8 for either model.** Past that, real detections are lost faster than spurious ones and
+   both accuracy and count fidelity degrade.
+5. **Compare models at their own optima**, not a shared threshold, or the comparison measures threshold
+   mismatch as much as model quality.
+
+# Caveats
+
+- **Precision is a lower bound.** Only clear, well-formed truck echoes were labelled, so some counted false
+  positives are real unlabelled vehicles. True precision is higher than shown, which means the real F1 peak
+  probably sits slightly *below* the thresholds identified here, and the true count ratios slightly lower.
+- **These thresholds are fitted on the same 21 scenes they are evaluated on.** They are descriptive of this
+  dataset, not validated operating points. A held-out corridor would be needed to confirm they transfer.
+- **The parity points are dataset-wide.** Per-corridor parity differs substantially — see the over-detection
+  breakdown in the main report — so a single global threshold still leaves per-corridor bias.
+- **Matching is custom**: red-keypoint distance within 18 m, not box IoU, so these values are not comparable to
+  published mAP figures.
+
+Underlying data: `data/threshold_sweep.csv` (28 thresholds × 2 models) and `data/results.csv`
+(21 scenes × 2 models × 6 thresholds), both derived from the stored per-detection records.

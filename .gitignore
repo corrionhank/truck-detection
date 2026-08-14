@@ -66,3 +66,14 @@ docs/archive/
 
 # imported exchange bundle (imagery is EDU-licensed; already merged into data/active)
 Annotations-RGB_trg-echo-exchange/
+
+# --- R analysis project (analysis/truck-detection-report) ---
+# Source (.Rmd/.Rproj) and the input CSVs ARE tracked. Rendered output is not:
+# self-contained HTML embeds every figure as base64, so each re-render rewrites
+# the whole file (~8 MB) and would accumulate in history. Rebuild with
+# rmarkdown::render(). The handoff/ bundle is likewise generated from report.Rmd.
+.Rproj.user/
+.Rhistory
+.RData
+analysis/**/*.html
+analysis/**/handoff/

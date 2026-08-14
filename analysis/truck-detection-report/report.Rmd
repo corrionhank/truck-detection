@@ -1,0 +1,814 @@
+---
+title: "Detection results"
+subtitle: "Two trained models tested on 21 labelled scenes across the full confidence range"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+    toc_depth: 2
+    number_sections: true
+    theme: flatly
+    df_print: kable
+    fig_width: 10
+    fig_height: 6
+    code_folding: hide
+  word_document:
+    toc: true
+    toc_depth: 2
+    fig_width: 9
+    fig_height: 5.5
+    df_print: kable
+  github_document:
+    toc: true
+    toc_depth: 2
+    html_preview: false
+---
+
+```{css, echo=FALSE, eval=knitr::is_html_output()}
+.main-container { max-width: 1220px; }
+
+table {
+  width: 100%;
+  margin: 1.4em 0 1.8em 0;
+  font-size: 0.92em;
+  border-collapse: collapse;
+}
+table th, table td {
+  padding: 7px 16px !important;
+  white-space: nowrap;
+  text-align: right;
+}
+table th:first-child, table td:first-child,
+table th:nth-child(2), table td:nth-child(2) { text-align: left; }
+table th {
+  border-bottom: 2px solid #d5dbe0;
+  font-weight: 600;
+  color: #2c3e50;
+}
+table tbody tr:nth-child(even) { background: #f7f9fa; }
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, dpi = 150, fig.retina = 2)
+suppressPackageStartupMessages({
+  library(readr); library(dplyr); library(tidyr); library(tibble)
+  library(ggplot2); library(forcats); library(scales)
+})
+MODELS <- c(MODEL_A = "adamiak-v2", MODEL_B = "warmup-v1")
+PAL    <- c("adamiak-v2" = "#2a78d6", "warmup-v1" = "#eb6834")
+FOCUS  <- c(0.3, 0.5, 0.7, 0.9)
+
+theme_set(theme_minimal(base_size = 11) +
+  theme(panel.grid.minor = element_blank(),
+        plot.title = element_text(face = "bold", size = 13),
+        plot.subtitle = element_text(colour = "grey35", size = 10),
+        plot.caption = element_text(colour = "grey45", size = 9, hjust = 0),
+        strip.text = element_text(face = "bold"),
+        legend.position = "top", legend.title = element_blank()))
+
+results <- read_csv("data/results.csv", show_col_types = FALSE) |>
+  mutate(model = recode(model, !!!MODELS), model = factor(model, levels = unname(MODELS)))
+sweep <- read_csv("data/threshold_sweep.csv", show_col_types = FALSE) |>
+  mutate(model = recode(model, !!!MODELS), model = factor(model, levels = unname(MODELS)))
+scenes <- read_csv("data/scenes.csv", show_col_types = FALSE)
+
+pooled <- function(df, ...) {
+  df |> group_by(...) |>
+    summarise(TP = sum(TP), FP = sum(FP), FN = sum(FN),
+              detected = sum(detected_count), annotated = sum(annotated_count), .groups = "drop") |>
+    mutate(precision = TP / pmax(TP + FP, 1), recall = TP / pmax(TP + FN, 1),
+           f1 = 2 * TP / pmax(2 * TP + FP + FN, 1), count_ratio = detected / pmax(annotated, 1))
+}
+foc <- results |> filter(threshold %in% FOCUS)
+```
+
+# Where the data comes from
+
+## The imagery
+
+Every scene is PlanetScope imagery from Planet Labs, licensed for education and research. The product is a
+`PSScene` in the `analytic_8b_sr_udm2` bundle from the PSB.SD "SuperDove" instrument: eight colour bands,
+unsigned 16-bit, corrected to Surface Reflectance, at three metres per pixel.
+
+Each image was ordered as a clip around a freight corridor rather than as a full satellite footprint, which keeps
+file sizes down and puts the coverage on road. Scenes were ordered with reprojection turned off, so each arrives
+on its native grid in its native UTM zone: zone 10 for western Washington, zone 11 for the east. That matters,
+because the detector relies on a very small offset between colour bands, and resampling the image would blur that
+offset away. The imagery is never re-gridded at any point.
+
+There are **24 scenes covering 205 square kilometres**, taken between **9 April and 22 June 2026**. Twenty-one of
+them are labelled and make up the test set. The other three have imagery but no labels, and are left out of every
+number in this report.
+
+The education licence caps how much area can be ordered each month and bills by whole scene rather than by the
+area actually used, so orders were kept small and targeted. That is why some corridors have much more coverage
+than others, and why all the imagery comes from one spring period rather than spanning the year.
+
+## The corridors
+
+Scenes were placed on Washington freight corridors, favouring locations near WSDOT permanent traffic counters so
+that model output could later be checked against measured traffic volumes.
+
+```{r corridor-source}
+scenes |> filter(labelled_vehicles > 0) |>
+  group_by(Corridor = corridor) |>
+  summarise(Scenes = n(), Vehicles = sum(labelled_vehicles),
+            `Area (km²)` = round(sum(valid_km2), 1),
+            `Vehicles per km²` = round(sum(labelled_vehicles) / sum(valid_km2), 2),
+            `Date range` = if (n() == 1) as.character(min(date))
+                           else paste(min(date), "to", max(date)), .groups = "drop") |>
+  arrange(desc(Vehicles))
+```
+
+Coverage is very uneven, and that affects everything else in this report. Centralia provides 281 of the 789
+labelled vehicles, over a third of the total, from only 13 square kilometres, because it is a busy stretch of
+Interstate 5 carrying heavy freight. The dry eastern corridors are the opposite: Yakima covers 51 square
+kilometres, four times Centralia's area, and has fewer than half as many vehicles. Traffic density ranges from
+about 21 vehicles per square kilometre on Centralia to 1.2 around Ellensburg, a difference of roughly eighteen
+times.
+
+That imbalance reflects the real road network rather than a mistake in sampling, but it means any average
+weighted by vehicle count is driven mostly by one corridor. This is why the report gives both vehicle-weighted
+and scene-weighted averages.
+
+## The labels
+
+All 789 vehicles were labelled by hand in QGIS, working on the GeoTIFF in true colour so that labels carry
+real-world coordinates rather than pixel positions. Each vehicle is marked with three points, one on the blue
+blob, one on the red and one on the green, each tagged with the number of the exposure it belongs to.
+
+Labelling was deliberately cautious. Only clear, well-formed echoes were marked, and blurry, misshapen,
+over-bright and very small ones were skipped. **This affects every number in this report.** The imagery contains
+real vehicles that were knowingly left unlabelled, so a detection that lands on one of them is counted as wrong
+even though it is right. Precision as reported is therefore a floor, not an estimate, and both models are better
+than the numbers below. How much better could only be settled by labelling one scene completely.
+
+## The two models
+
+Both are Keypoint R-CNN detectors with the same architecture. They differ in what they were trained on and how
+training was scheduled.
+
+`adamiak-v2` was trained on nine scenes containing 228 chips, 78 percent of them from Centralia. `warmup-v1` was
+trained later on twenty scenes and 624 chips, with Centralia reduced to 23 percent, and added learning-rate
+warmup, translation-jitter augmentation and multi-vehicle chip targets.
+
+Because the training sets differ so much, every comparison in this report also reflects the difference in
+corridor coverage. That means neither model can be shown to be better because of the training changes alone. What
+can be shown is that the two behave differently, in ways that are consistent and repeatable.
+
+## How the test was run
+
+Both models were run over all 24 scenes with the same settings: a 64-pixel window moving in steps of 40 pixels,
+detections kept only above the confidence threshold, duplicates within 96 metres removed, and a detection counted
+as correct when its red keypoint lands within 18 metres of a labelled vehicle.
+
+Each scene was processed once at a threshold of zero, and every detection was saved with its score. The threshold
+filters detections after the model has run rather than changing how it runs, so any higher threshold can be
+worked out by filtering those saved records. That is how the report covers 28 thresholds without running the
+detector more than once per scene.
+
+# What is being measured
+
+The detector does not recognise trucks by shape. At three metres per pixel a truck is only a few pixels across.
+It works instead from the way the satellite records its colour bands a fraction of a second apart, which makes a
+moving vehicle appear as a short blue, red and green streak, called a moving echo. A parked vehicle does not
+streak, so only moving traffic is detected.
+
+The model reports each detection with a **confidence score** between 0 and 1. A **confidence threshold** decides
+which detections are kept: raise it and fewer, more certain detections survive. The threshold is applied after
+the model has run, so it can be changed without running the detector again. It is the main setting in this
+report, and it changes the results more than the difference between the two models does.
+
+Each kept detection is compared against the hand-labelled vehicles. If it lands within 18 metres of one, it
+counts as correct. From those matches come the four numbers used throughout:
+
+**Precision** is the share of detections that are real. **Recall** is the share of real vehicles that were found.
+**F1** combines the two into one number that is only high when both are high. **Count ratio** is simply the
+number of detections divided by the number of labelled vehicles, so 1.0 means the right total was reported,
+whether or not the individual vehicles were the right ones. Count ratio is reported separately because the goal
+of the project is traffic counts, and a model can report the right total while getting many individual vehicles
+wrong.
+
+Two of these appear in two forms. **Pooled** figures add the counts across all 21 scenes and work out the metric
+once, which gives every vehicle equal weight and lets the busy corridors dominate. **Per-scene** figures work out
+the metric for each scene and then average, which gives every scene equal weight. Both are reported because
+coverage is so uneven, and the size of the gap between them tells you how much a model's headline number
+depends on a few busy scenes.
+
+Full definitions, including how each number is calculated and what the model actually produces, are in the
+glossary at the end of the report.
+
+# Which confidence levels this report compares
+
+The confidence threshold sets how choosy the detector is. Low values keep nearly everything it proposes; high
+values keep only what it is most sure about. It is chosen after training rather than learned, and it changes the
+results more than the difference between the two models does. This report compares four evenly spaced levels,
+**0.3, 0.5, 0.7 and 0.9**, covering the range from loose to strict.
+
+**0.3** is the loose end, close to what the detector proposes with almost no filtering. It shows how much each
+model can find at best, and how many wrong detections come with that.
+
+**0.5** is the current setting, the value the inference console defaults to and the setting behind every number
+previously reported in this project.
+
+**0.7** is the strict but still usable middle. Model B is near its best here, and it is where the two models come
+closest to each other.
+
+**0.9** is the strict end, where only near-certain detections survive. A counting programme might reasonably
+prefer to trust what it reports over finding everything, and this level shows what that costs.
+
+The best settings do not fall on these round numbers: model A peaks at 0.55 and model B at 0.65. Both are marked
+on the full sweep later in the report, which covers all 28 thresholds rather than these four.
+
+# Results at the four confidence levels
+
+## Overall performance, pooled across all scenes
+
+The table below is **pooled**. Every scene's true positives, false positives and false negatives are added
+together across the 21 scenes, and precision, recall and F1 are worked out once from those totals. This gives
+every vehicle equal weight, so the busy corridors dominate; Centralia alone accounts for 281 of the 789 labelled
+vehicles. It answers the question the project actually cares about: across the whole area surveyed, what share of
+trucks were found and what share of detections were real.
+
+```{r headline}
+pooled(foc, model, threshold) |>
+  transmute(Model = model, Threshold = threshold, TP, FP, FN,
+            Detections = detected, Labelled = annotated,
+            Precision = round(precision, 3), Recall = round(recall, 3),
+            F1 = round(f1, 3), `Count ratio` = round(count_ratio, 2))
+```
+
+At **0.3** both models report far too much. Model A returns 1,218 detections against 789 labelled vehicles, and
+model B returns 2,252, nearly three times the true count. Recall is at its highest here, 53 percent for model A
+and 60 percent for model B, but precision is poor at 34 and 21 percent. Neither is usable as a count at this
+setting. The recall figures are still useful, because they are the closest thing in the table to what each model
+can find at all.
+
+At the **current setting of 0.5** the two separate. Model A tightens to 708 detections, just under the 789
+present, and reaches its best F1 in this table at 0.480, with 51 percent precision against 46 percent recall.
+Model B still returns 1,603 detections, twice the true count. Its F1 of 0.355 is caused by the volume of wrong
+detections rather than by failing to find trucks: its recall, at 54 percent, is higher than model A's.
+
+At **0.7** the two almost meet, and this is the most useful row in the table. Model B improves to 0.376, its best
+of the four. Model A drops to 0.441, because it is past its best setting near 0.55 and the filter is now removing
+more real detections than wrong ones. Their per-scene averages are effectively tied, 0.351 for model A against
+0.352 for model B. Model B's count is also at its closest to correct here, 1,044 detections against 789 vehicles.
+
+At **0.9** the order reverses. Model A becomes very selective, at 87 percent precision, the highest in this
+table, but it finds only 14 percent of the vehicles and its F1 drops to 0.237. Model B holds up much better at
+0.313 and is now clearly ahead. On some corridors model A reports nothing at all at this level: it scores zero on
+Stanwood, having found none of that scene's vehicles with enough confidence to report them.
+
+No single threshold suits both models. Model A is at its best near 0.5 and is not usable by 0.9. Model B is at
+its best near 0.7 and still works at 0.9.
+
+## Variation between scenes
+
+The overall figures hide how differently the two models behave from one scene to the next, which for a monitoring
+programme matters as much as the average.
+
+```{r box-helper, include=FALSE}
+box_metric <- function(var, title, sub, cap) {
+  foc |>
+    ggplot(aes(factor(threshold), .data[[var]], colour = model, fill = model)) +
+    geom_boxplot(alpha = 0.16, width = 0.5, outlier.shape = NA, linewidth = 0.6,
+                 position = position_dodge(width = 0.66)) +
+    geom_point(position = position_jitterdodge(jitter.width = 0.13, dodge.width = 0.66),
+               alpha = 0.65, size = 2) +
+    scale_colour_manual(values = PAL) + scale_fill_manual(values = PAL) +
+    scale_y_continuous(limits = c(0, 1), labels = percent_format(accuracy = 1)) +
+    labs(title = title, subtitle = sub, x = "confidence threshold", y = NULL, caption = cap)
+}
+```
+
+```{r fig-box-precision, fig.height=5, fig.width=9}
+box_metric("precision", "Precision by scene",
+  "Each point is one of the 21 labelled scenes; boxes show the middle half of the range.",
+  "Precision rises with the threshold for both models. Model A varies far more between scenes, especially at 0.9.")
+```
+
+Precision is where the two models differ most. Model A is the more precise at every level, and the gap grows as
+the threshold rises, from 0.34 against 0.22 at 0.3 to 0.70 against 0.42 at 0.9. But its results vary across
+almost the whole range from scene to scene, and at 0.9 that variation is extreme, with a standard deviation of
+0.39. This happens because model A returns so few detections on quiet corridors at 0.9 that one hit or miss moves
+that scene's precision by tens of points, leaving scenes at 100 percent next to scenes at zero. Model B's
+precision is lower throughout but far steadier, staying close to its median on nearly every scene.
+
+```{r fig-box-recall, fig.height=5, fig.width=9}
+box_metric("recall", "Recall by scene",
+  "Each point is one of the 21 labelled scenes; boxes show the middle half of the range.",
+  "Recall falls with the threshold for both models. Model B is higher and steadier at every level.")
+```
+
+Recall separates the two most clearly. Model B is above model A at every level and stays in a narrow band, with a
+standard deviation near 0.10 throughout, while model A varies much more and falls away faster. The two are
+closest at 0.3, where model A still finds half the vehicles, and furthest apart at 0.9, where model B finds a
+quarter of them and model A one in ten. This is model B's wider training coverage showing through: it finds a
+similar share of vehicles almost everywhere, while how well model A does depends heavily on which corridor it is
+looking at.
+
+```{r fig-box-f1, fig.height=5, fig.width=9}
+box_metric("f1", "F1 by scene",
+  "Each point is one of the 21 labelled scenes; boxes show the middle half of the range.",
+  "Model A leads at 0.3 and 0.5, the two are tied at 0.7, and model B leads at 0.9. Model B varies less throughout.")
+```
+
+F1 puts the two together, and the four levels show a clear crossover. Model A leads at 0.3 and 0.5, the two are
+effectively tied at 0.7 with 0.351 against 0.352, and model B is clearly ahead at 0.9 with 0.289 against 0.172.
+Model A's lead at the lower levels comes with a run of poor scenes that pulls its average well below its median,
+while model B's worst scenes are not far from its best. Which model looks better depends on where the threshold
+is set.
+
+The table below summarises this. It is **not** a repeat of the pooled table above. Here each scene's precision,
+recall and F1 are worked out separately and then averaged across the 21 scenes, giving every scene equal weight
+instead of every vehicle. A six-vehicle scene therefore counts as much as Centralia, which is why these averages
+sit below the pooled ones: at 0.5 model A reads 0.402 mean F1 here against 0.480 pooled, because its weakest
+results come from quiet scenes that the pooled figure barely registers. The standard deviation and variance
+columns are the point of this table, and they have no pooled equivalent.
+
+```{r spread-table}
+foc |>
+  group_by(Model = model, Threshold = threshold) |>
+  summarise(`Scenes` = n(), `F1 mean` = round(mean(f1), 3), `F1 median` = round(median(f1), 3),
+            `F1 SD` = round(sd(f1), 3), `F1 var.` = round(var(f1), 4),
+            `Recall mean` = round(mean(recall), 3), `Recall SD` = round(sd(recall), 3),
+            `Prec. mean` = round(mean(precision), 3), `Prec. SD` = round(sd(precision), 3),
+            .groups = "drop")
+```
+
+Model B is clearly the steadier of the two. Its per-scene F1 standard deviation runs from 0.124 down to 0.094
+across the four levels, against model A's 0.195 to 0.125, and its variance is close to forty percent of model A's
+at 0.3, 0.5 and 0.7. The pattern is stronger in recall, where model B stays in a narrow band on nearly every
+scene while model A ranges from eighteen percent recall on Spokane to sixty-seven percent on Stanwood and
+auburn-snoqualmie at the default threshold. Model A only becomes steadier at 0.9, and for the wrong reason: a
+model that reports almost nothing is consistently bad rather than reliably good.
+
+Part of the reason shows in the scene-level results. At 0.5 model A reaches a pooled F1 of 0.526 on the nine
+scenes it trained on against 0.454 on the twelve it did not. That is a real gap, and one model B cannot be tested
+for, since only a single scene was kept back from it. But the pattern is not clean. Model A's best corridor,
+auburn-snoqualmie at 0.667, is one it never trained on, while two of its weakest, Stanwood and Ellensburg, are
+corridors it did train on. Training coverage explains some of model A's variation but not all of it. What can be
+said plainly is that model A is not the better detector everywhere; it is the less predictable one.
+
+This matters in practice. The goal is total truck counts, and a detector that is wrong by a similar amount
+everywhere can be corrected with one adjustment factor. A detector that is good in some places and nearly blind
+in others needs a different correction in each place, which is much harder to justify.
+
+## Counting behaviour
+
+Because the goal is counts rather than identifying individual vehicles, how many detections each setting produces
+compared to the true number matters as much as whether each one is right.
+
+```{r fig-count, fig.height=9, fig.width=11}
+YCAP  <- 8
+above <- foc |> filter(count_ratio > YCAP)
+
+foc |>
+  ggplot(aes(factor(threshold), count_ratio, colour = model, fill = model)) +
+  geom_hline(yintercept = 1, linetype = "dashed", colour = "grey25", linewidth = 0.7) +
+  geom_boxplot(alpha = 0.16, width = 0.56, outlier.shape = NA, linewidth = 0.6,
+               position = position_dodge(width = 0.68)) +
+  geom_point(position = position_jitterdodge(jitter.width = 0.14, dodge.width = 0.68),
+             alpha = 0.65, size = 2) +
+  annotate("text", x = 4.48, y = 1, label = "count parity", vjust = -0.7, hjust = 1,
+           size = 3.4, colour = "grey25") +
+  scale_colour_manual(values = PAL) + scale_fill_manual(values = PAL) +
+  scale_y_continuous(breaks = seq(0, YCAP, 1), expand = expansion(mult = c(0.02, 0.06))) +
+  coord_cartesian(ylim = c(0, YCAP)) +
+  labs(title = "Detections compared to labelled vehicles",
+       subtitle = paste0("Linear scale. The dashed line is count parity: one detection per labelled vehicle. ",
+                         nrow(above), " points fall above the axis (highest ",
+                         sprintf("%.1f", max(above$count_ratio)),
+                         "), all from EllensburgPreferredTest_01, a scene with only 2 labelled vehicles."),
+       x = "confidence threshold", y = "detections ÷ labelled vehicles",
+       caption = "Model A reaches parity near 0.45, model B near 0.775. Boxes use all the data; the axis is cut off at 8 for readability.")
+```
+
+The four levels sit either side of count parity for both models, but at very different points. The ratios given
+here are pooled across the network. The per-scene points in the figure vary much more, because a scene with only
+a few labelled vehicles gives a very large ratio from a small error. The four points above the top of the axis
+all come from one two-vehicle scene, where 20 to 49 detections against two labels gives ratios between 10 and
+24.5. That says something about the small number of labels, not about the scene being hard.
+
+Model A reports about half again too many at 0.3, sits just under parity at 0.5 with 0.90 detections per labelled
+vehicle, and then reports too few: about half the true number at 0.7 and a sixth at 0.9. Model B reports too many
+at every level up to 0.7, nearly three times too many at 0.3 and twice too many at 0.5, comes closest at 0.7 with
+1.32, and passes through parity between 0.7 and 0.9. Neither counts correctly at the current setting: model A is
+10 percent low and model B is twice high.
+
+The threshold that gives an accurate count is not the one that gives the best F1. Model A reaches parity near
+0.45 but peaks on F1 near 0.55. Model B reaches parity near 0.775 but peaks near 0.65.
+
+Some of the over-counting comes from the cautious labelling rather than from real error, since unlabelled real
+vehicles raise the detection count without raising the number they are compared against. This affects the
+higher-recall model more, so model B's true ratios are lower than the plotted ones by an unknown amount.
+
+## How performance varies by corridor
+
+```{r fig-corridor, fig.height=6.5, fig.width=10}
+pooled(foc, corridor, model, threshold) |>
+  mutate(corridor = fct_reorder(corridor, f1, .fun = max)) |>
+  ggplot(aes(f1, corridor, fill = model)) +
+  geom_col(position = position_dodge(width = 0.78), width = 0.7) +
+  facet_wrap(~ paste("threshold", threshold), nrow = 1) +
+  scale_fill_manual(values = PAL) +
+  labs(title = "F1 by corridor at each threshold",
+       subtitle = "Pooled within corridor, at each of the four confidence levels.",
+       x = "F1", y = NULL,
+       caption = "Model A is strongest on auburn-snoqualmie and Centralia; model B is more even across the network.")
+```
+
+Performance follows traffic density more than terrain, and the two models fail in different places. At the
+default threshold model A is strongest on auburn-snoqualmie, Tri-Cities and Centralia, at 0.657, 0.622 and 0.597,
+which are the busy interurban corridors. It does much worse on the quiet ones, reaching only 0.256 on Spokane,
+0.264 on Ellensburg and 0.267 on Kent/Auburn, where a few labelled vehicles spread over a large area make every
+error costly. Model B covers a much narrower range at the same threshold, from 0.428 on Centralia down to 0.200
+on Kent/Auburn.
+
+The dry eastern corridors separate the two most, and in both directions. Model B beats model A on Spokane, 0.423
+to 0.256, and on Ellensburg, 0.325 to 0.264. Model A wins Tri-Cities clearly, 0.622 to 0.401, and is slightly
+ahead on Yakima. Model A's poor results on the quiet corridors are the main reason its scene-weighted average
+falls below its vehicle-weighted one.
+
+At 0.9 the picture changes completely. Model A stays usable only on the three busy corridors and drops below 0.15
+on five of the nine, including zero on Stanwood. Model B stays above 0.24 on every corridor, and its best at this
+level is Spokane at 0.444, a corridor model A never trained on and scores 0.102 on. Model B's best corridor
+result across all four levels is close to that: 0.449, at 0.7 on both Spokane and Ellensburg.
+
+# Behaviour across the full confidence range
+
+The four levels above are samples from a continuous range. Sweeping the whole range shows how each model responds
+and finds the setting where each does best, including the best settings that fall between the round numbers.
+
+```{r fig-sweep, fig.height=5.4, fig.width=11}
+peaks <- sweep |> group_by(model) |> slice_max(mean_F1, n = 1) |> ungroup()
+sweep |>
+  ggplot(aes(threshold, mean_F1, colour = model)) +
+  geom_vline(xintercept = FOCUS, colour = "grey88") +
+  geom_line(linewidth = 1) +
+  geom_point(data = peaks, size = 3.4, shape = 21, stroke = 1.5, fill = "white") +
+  geom_text(data = peaks, aes(label = sprintf("peak %.3f at %.2f", mean_F1, threshold)),
+            vjust = -1.4, size = 3.3, show.legend = FALSE) +
+  scale_y_continuous(limits = c(0, 0.45)) +
+  scale_colour_manual(values = PAL) +
+  labs(title = "Mean F1 across the confidence range",
+       subtitle = "Averaged over the 21 labelled scenes. Grey lines mark the four levels compared above.",
+       x = "confidence threshold", y = "mean F1",
+       caption = "Each curve has one peak: F1 rises while the filter is removing wrong detections, then falls once it starts removing real ones.")
+```
+
+Both curves rise, peak and fall. At first the filter removes more wrong detections than real ones, so results
+improve. Past the peak that reverses and real detections are lost faster than wrong ones. **Model A peaks at 0.55
+with a mean F1 of 0.403, and model B at 0.65 with 0.361.** Neither was being run at its best setting, and the
+current default of 0.5 sits below both.
+
+```{r fig-sweep-prf, fig.height=4.8, fig.width=11}
+sweep |>
+  select(model, threshold, Precision = pooled_P, Recall = pooled_R, `Count ratio` = count_ratio) |>
+  pivot_longer(c(Precision, Recall, `Count ratio`), names_to = "metric", values_to = "value") |>
+  mutate(metric = factor(metric, levels = c("Precision", "Recall", "Count ratio"))) |>
+  ggplot(aes(threshold, value, colour = model)) +
+  geom_hline(data = tibble(metric = factor("Count ratio",
+              levels = c("Precision", "Recall", "Count ratio")), y = 1),
+             aes(yintercept = y), linetype = "dashed", colour = "grey40") +
+  geom_line(linewidth = 1) +
+  facet_wrap(~ metric, nrow = 1, scales = "free_y") +
+  scale_colour_manual(values = PAL) +
+  labs(title = "Precision, recall and count ratio across the confidence range",
+       subtitle = "Precision rises steadily, recall falls steadily, and the count ratio drops through parity.",
+       x = "confidence threshold", y = NULL,
+       caption = "Each model reaches count parity at a different threshold: model A near 0.45, model B near 0.775.")
+```
+
+Precision and recall move in opposite directions across the whole range, which is why F1 peaks somewhere in the
+middle. The count ratio falls steadily and passes through parity at a different threshold from the F1 peak, near
+0.45 for model A and 0.775 for model B. The setting that gives the best detection quality is therefore not the
+setting that gives the most accurate count.
+
+This is also why very high thresholds were ruled out. At 0.95 model B finds 17 percent of the labelled vehicles
+and model A about 5 percent, and both score worse on F1 than they do at 0.3, model A far worse at 0.094 against
+0.417. Raising the threshold does stop the over-counting, but it replaces it with heavy under-counting.
+
+# Summary
+
+**Model A reaches the higher F1.** Its best measured setting is a threshold near 0.55, giving a mean per-scene F1
+of 0.403 and a pooled F1 of 0.485. For comparison, Van Etten's 2024 study of vehicle detection in PlanetScope
+imagery reports an F1 of 0.49 on a similar task, so the detector is working at roughly the level published work
+reaches at this resolution. The two studies define their metrics differently enough that this is a rough
+comparison rather than an exact one.
+
+**Model B is the more consistent detector.** Its per-scene F1 varies about forty percent less than model A's, and
+its recall stays within a narrow band across every corridor, including the ones it never trained on. Model A is
+better on the busy corridors and much worse on the quiet ones, which is what produces its higher average and its
+much wider spread.
+
+Which of those two properties is worth more depends on the use. For a single accurate count of a busy stretch of
+road, model A is the better choice. For anything that has to work the same way across the whole network, model B
+is, because a detector that is wrong by a similar amount everywhere can be corrected with one adjustment factor,
+while one that is good in some places and blind in others cannot.
+
+**Neither model is in good enough shape to estimate annual truck counts from new imagery.** Both need a threshold
+chosen for them, and the setting that gives the best F1 is not the setting that gives the right count. Neither
+counts correctly at the current default: model A reports 10 percent too few, model B twice too many. More
+importantly, nothing here shows how either model behaves on ground it has not seen, or at times of year it has
+not seen, and both of those are required before a detection count can be turned into an annual traffic estimate.
+
+# Limitations
+
+**Precision is a floor, not an estimate.** Only clear echoes were labelled, and the imagery contains real
+vehicles that were left unmarked, so both models are better than these numbers show. The gap cannot be measured
+without labelling one scene completely.
+
+**There is no clean test of how the models handle new ground.** Only one scene was kept back from both models,
+and its footprint overlaps ground they trained on by 97 percent, so it is a repeat visit to familiar terrain
+rather than a test of somewhere new.
+
+**The two models cannot be compared cleanly.** Their training sets differ in both size and mix of corridors, so
+the differences between them cannot be attributed to the training changes alone.
+
+**All the imagery comes from one spring period**, between April and June, so nothing here shows how the detector
+behaves in other seasons. That matters most for the farming corridors, which change appearance a great deal
+through the year.
+
+**The matching rule is specific to this project.** A detection counts when its red keypoint lands within 18
+metres of a label, rather than the box-overlap test normally used in object detection, so comparisons to
+published results are approximate.
+
+Taken together, these points set the limit on what can be claimed. The results show that the method works and
+that model A is more accurate while model B is more consistent. They do not show that either model can be pointed
+at new imagery and produce a reliable annual count.
+
+# What goes into the model and what comes out
+
+This section lists everything the detector is given and everything it produces, in the order it moves through
+the pipeline. It is a reference for anyone who needs to reproduce or extend the work.
+
+## Inputs: the imagery
+
+Each scene starts as a GeoTIFF with eight colour bands, unsigned 16-bit, at three metres per pixel. Only three
+bands are used. Band 6 becomes the red channel, band 4 the green and band 2 the blue, which gives a true-colour
+image and is also the order the sensor records them.
+
+Those bands are 16-bit, and almost all the real values sit in a narrow part of that range, so each band is
+stretched before use: the 2nd and 98th percentile of the non-zero pixels are mapped onto 0 to 255. The
+percentiles are worked out separately for each scene, so two scenes are not stretched by the same amounts. Pixels
+with no data stay black.
+
+The stretched image is then covered by a sliding 64-pixel window moving in steps of 40 pixels. A window is only
+processed if at least 15 percent of its pixels contain data, which skips the empty area outside the ordered clip.
+Each window is passed to the model as a 3 × 64 × 64 array of values divided by 255. Inside the model, torchvision
+resizes it to a minimum side of 192 pixels and normalises it using the standard ImageNet mean and standard
+deviation.
+
+## Inputs: the labels
+
+Labels live in a GeoPackage layer with one row per point, so three rows per vehicle. Each row carries the point
+geometry in the scene's coordinate system, a `vehicle_id` grouping the three points, a `sequence` number saying
+which band the point marks (1 blue, 2 red, 3 green), and a `scene` text field.
+
+That `scene` field is what joins labels to imagery. The join is never done by location, because several scenes
+overlap on the ground and a location-based match would put one scene's labels on another scene's pixels. Only
+vehicles that have all three sequence numbers are used; incomplete ones are dropped.
+
+Labels are used for two separate purposes: to build training chips, and to score detections. No scene is used
+for both purposes in the same model.
+
+## Inputs: model configuration
+
+Each trained model stores its own configuration, because the settings below change the shape of the network and
+weights saved under one set will not load under another.
+
+| Setting | Value |
+|---|---|
+| Backbone | ResNet-50 with Feature Pyramid Network |
+| Classes | 2 (moving echo, background) |
+| Keypoints | 3 (blue, red, green) |
+| Anchor sizes | 4, 8, 16, 32, 48 pixels |
+| Anchor aspect ratios | 0.25, 0.5, 0.75, 1.0, 1.25 |
+| Input resize | minimum side 192, maximum side 320 |
+
+## Inputs: run settings
+
+These are chosen at run time and do not change the model. They are the settings that produced every number in
+this report.
+
+| Setting | Value | What it does |
+|---|---|---|
+| Window size | 64 px | Size of each view passed to the model |
+| Stride | 40 px | Step between windows, so they overlap by 24 px |
+| Minimum valid fraction | 0.15 | Skips windows that are mostly empty |
+| Confidence threshold | 0.3 to 0.95 | Which detections are kept |
+| Duplicate radius | 32 px (96 m) | Minimum spacing between kept detections |
+| Match radius | 6 px (18 m) | How close a detection must be to a label to count |
+| Ground sample distance | 3 m | Used to convert pixels to metres |
+
+Three further settings are internal to torchvision and were left at their defaults: a region score cutoff of
+0.05, a non-maximum-suppression overlap of 0.5, and a cap of 100 detections per window.
+
+## Outputs: what the model returns for each window
+
+For every window, the model returns five arrays, where N is the number of candidate detections it found in that
+window, ordered from highest score to lowest.
+
+| Output | Shape | What it is | Used here |
+|---|---|---|---|
+| `scores` | (N) | Confidence that the region holds a moving echo | Yes |
+| `keypoints` | (N, 3, 3) | x, y and a visibility flag for each of the three keypoints | Yes, x and y |
+| `boxes` | (N, 4) | The rectangle around each detection | Recorded, not used |
+| `keypoints_scores` | (N, 3) | How sharp each keypoint's heatmap peak was | Recorded, not used |
+| `labels` | (N) | Class number, always 1 here | No |
+
+The pipeline keeps only the highest-scoring detection in each window, then drops any detection whose red
+keypoint falls within 96 metres of a higher-scoring one already kept. What remains is a detection, with a
+confidence score, three keypoint positions in scene pixels, and the red keypoint converted to UTM easting and
+northing using the scene's geotransform.
+
+## Outputs: files written per scene
+
+Running the detector on one scene writes a JSON file of detections, each with its score, its three keypoints in
+pixels and its red keypoint in UTM. It also writes a preview image of the whole scene and a montage of close-up
+crops around each detection for visual checking. If the scene is labelled, it also reports how many labelled
+vehicles were matched, how many detections landed near a label and how many did not.
+
+## Outputs: the analysis tables
+
+The results in this report come from four tables built from those per-scene runs.
+
+**Per-detection records**, one row per surviving detection, are the most detailed output. Each row holds which
+model and scene it came from and whether that scene was trained on or labelled; the window it was found in and
+whether it was the top-scoring detection there; its confidence; the box position and size; all three keypoints in
+pixels and in UTM; the three keypoint scores and their mean; measured streak geometry, meaning the streak length
+in pixels and metres, the two segment lengths, their ratio, how straight the three points are and the compass
+bearing; and finally its distance to the nearest label, which label it matched if any, and the keypoint error in
+pixels. There are 44 columns in total, covering roughly 21,000 detections per model.
+
+**Per-scene results** hold one row per scene, model and threshold: the scene and corridor, the threshold, the
+number of labelled vehicles and detections, true positives, false positives and false negatives, and the derived
+precision, recall, F1, count ratio and signed count error. This table has 336 rows and is what every figure and
+table in this report is calculated from.
+
+**The threshold sweep** holds one row per model and threshold across 28 thresholds, with mean and standard
+deviation of per-scene F1, and the pooled F1, precision, recall and count ratio.
+
+**Scene metadata** holds one row per scene with its corridor, date, coordinate system, size in pixels, valid area
+in square kilometres, number of windows processed and number of labelled vehicles.
+
+Everything in this report is derived from those four tables. No number was entered by hand.
+
+# Glossary and definitions
+
+Definitions for the terms and metrics used above, including how each is calculated. Ordinary statistics such as
+means and standard deviations are used in the normal way and are not defined here.
+
+## The moving echo
+
+The signal the detector looks for. The SuperDove sensor records its colour bands a fraction of a second apart. A
+parked object sits in the same place in every band, but a moving vehicle has shifted between them, so combining
+three bands into a colour image shows it as a short streak of separated colour blobs instead of a single object.
+In the band combination used here the streak runs blue, red, green, which is the order the sensor records those
+bands rather than their numbering. Everything in this report finds and measures that streak, not the vehicle
+itself.
+
+## Keypoints
+
+A **keypoint** is a predicted point marking where one band's image of the vehicle sits. Every vehicle, whether
+labelled by hand or found by the model, is represented by three of them: blue, red and green. Together they give
+the streak's position, length and direction.
+
+The model does not predict these coordinates directly. For each region it looks at, the keypoint head produces
+three heatmaps $H_1, H_2, H_3 \in \mathbb{R}^{56 \times 56}$, one per keypoint, over a grid laid across that
+region. The predicted position of keypoint $k$ is the cell with the highest value,
+
+$$(u_k, v_k) = \arg\max_{(u,v)} H_k(u,v),$$
+
+which is then converted back to scene pixel coordinates using the region's position and scale, and from there to
+UTM easting and northing using the scene's geotransform. Training handles this as a choice between cells rather
+than as a measurement: the $56 \times 56$ grid is flattened into 3,136 possible positions and the model is scored
+on whether it picked the right one. It is asked which cell holds the band, not how far off its guess was.
+
+Three uses matter later. The **red keypoint** is treated as the vehicle's position, and every distance in this
+report is measured between red keypoints. The distance from blue to green gives the **streak length**, which
+grows with speed. The spacing and straightness of the three points describe the shape of the streak, which is
+what separates a real echo from a bright patch of ground.
+
+## Keypoint score
+
+The model also reports the heatmap value at each chosen peak, $H_k(u_k, v_k)$. This is a raw score rather than a
+probability: it has no fixed range, it is not calibrated, and in this data it runs from about $-4$ to $+8$. It
+measures how sharp the peak is, so a clear band position scores high and a vague one scores low or negative. The
+pipeline that produced these results saves these values but does not filter on them, so they change nothing in
+this report. They are defined here because they appear in the detection data files.
+
+## Confidence, and the confidence threshold
+
+**Confidence**, also called the detection score, is the model's estimate that a region holds a moving echo rather
+than background. For each region the classification head produces two values, $z_0$ for background and $z_1$ for
+the echo class, and the confidence is their softmax:
+
+$$s = \frac{e^{z_1}}{e^{z_0} + e^{z_1}} \in (0, 1).$$
+
+So it falls between 0 and 1 and behaves like a probability, but it is not calibrated. A detection scoring 0.9 is
+not right 90 percent of the time. Only the ranking can be relied on: higher-scoring detections are more likely to
+be real than lower-scoring ones. That is all a threshold needs.
+
+The **confidence threshold** $t$ is the cutoff applied to that score. Detections with $s \ge t$ are kept and the
+rest are dropped. It is applied after the model has run and is not something the model is trained with. The model
+behaves the same way at every threshold; only the number of detections that survive changes. This is why one pass
+over a scene, saved at threshold 0, covers every threshold in this report, and why the sweep can cover 28 values
+without running the detector again.
+
+## Windows, stride and duplicate removal
+
+The detector was trained on 64-pixel chips, so a full scene is covered by sliding a **64-pixel window** across it
+in steps of **40 pixels**. That step, the **stride**, is shorter than the window, so neighbouring windows overlap
+by 24 pixels. The overlap makes sure no vehicle sits on a window edge, but it also means the same vehicle is
+shown to the model several times and can be found more than once.
+
+Two rules handle that. Only the highest-scoring detection in each window is kept, and then **duplicate removal**
+drops any remaining detection whose red keypoint falls within **32 pixels (96 metres)** of a higher-scoring one
+already kept. What survives both rules is what this report calls a **detection**.
+
+## Matching a detection to a labelled vehicle
+
+A detection counts as correct when its red keypoint falls within **18 metres**, which is 6 pixels at 3 metres per
+pixel, of a labelled vehicle's red keypoint:
+
+$$\lVert \mathbf{p}_{\text{red}}^{\text{det}} - \mathbf{p}_{\text{red}}^{\text{label}} \rVert_2 \le 18\ \text{m}.$$
+
+This is a distance test rather than the box-overlap (IoU) test normally used in object detection. At 3 metres per
+pixel a truck is only a few pixels across, so box overlap swings wildly on rounding alone, while the streak
+position stays meaningful. Because of this, none of the numbers here can be compared directly to published mAP or
+IoU results.
+
+Duplicate removal keeps surviving detections at least 96 metres apart, and the match radius is 18 metres, so no
+two detections can be matched to the same label. Each label is matched at most once.
+
+## True positives, false positives and false negatives
+
+A **true positive** (TP) is a labelled vehicle that has a matching detection. A **false positive** (FP) is a
+detection that matches no label. A **false negative** (FN) is a labelled vehicle with no matching detection.
+There is no true negative in this task: the imagery is continuous ground rather than a fixed list of candidates,
+so "correctly reporting nothing" is not something that can be counted. Any metric that needs true negatives,
+including accuracy, cannot be used here.
+
+One point applies throughout. Only clear, well-formed echoes were labelled, so the imagery contains real vehicles
+that were left unmarked. A detection that lands on one of those is counted FP even though it is right, which
+makes every precision and F1 number in this report a **floor** rather than an estimate.
+
+## Precision, recall and F1
+
+**Precision** is the share of detections that are real: when the model reports a truck, how often it is right.
+**Recall** is the share of real vehicles that were found: of the trucks present, how many the model found. **F1**
+combines the two into one number (their harmonic mean) that is only high when both are high. A model can reach
+perfect recall by reporting everything, or near-perfect precision by reporting almost nothing, and F1 rules out
+both.
+
+$$P = \frac{TP}{TP + FP}, \qquad R = \frac{TP}{TP + FN}, \qquad F_1 = \frac{2PR}{P + R} = \frac{2\,TP}{2\,TP + FP + FN}.$$
+
+Raising the threshold always pushes precision up and recall down. This is why F1 peaks somewhere in the middle of
+the range, and why the choice of threshold is a real decision.
+
+## Count ratio
+
+Detections divided by labelled vehicles over the same area,
+
+$$\text{count ratio} = \frac{D}{A},$$
+
+where $D$ is the number of detections and $A$ the number of labelled vehicles. A value of 1 is **count parity**,
+meaning the right number of vehicles was reported, whether or not they were individually the right ones. It is
+reported separately from F1 because the goal of the project is traffic counts, and the two can disagree. A model
+can hit parity while getting many individual vehicles wrong, with its misses and its false detections cancelling
+out. Above 1 means too many detections, below 1 too few.
+
+## Pooled versus per-scene averaging
+
+Every metric can be worked out two ways, and this report uses both because they answer different questions.
+
+**Pooled** (micro-averaged) numbers add up the counts across all 21 scenes and work out the metric once from
+those totals, for example $P = \sum_s TP_s / \sum_s (TP_s + FP_s)$. This gives every vehicle equal weight, so
+busy corridors dominate. It answers what share of all the trucks across the network were found.
+
+**Per-scene** (macro-averaged) numbers work out the metric for each scene separately and then average those
+results, $\bar{P} = \frac{1}{S}\sum_s P_s$. This gives every scene equal weight, so a scene with six vehicles
+counts as much as one with eighty. It answers how the detector does on a typical scene.
+
+The two differ here because the models do better where traffic is heavier: model A reads 0.480 pooled F1 against
+0.402 per-scene at the default threshold. The bigger that gap is, the more a model's headline number depends on a few busy scenes.
+
+## Scenes, corridors, and training status
+
+A **scene** is one satellite image of one place on one date, and is the unit of both imagery and testing. A
+**corridor** is a stretch of freight route and can contain several scenes; where it does, they are usually the
+same ground photographed on different dates rather than different places. A scene is **labelled** if its vehicles
+have been marked, which is true of 21 of the 24, and only labelled scenes contribute to any number here.
+**Trained on** means that scene's vehicles were used to build that particular model. It differs between the two
+models, so the same scene can be training data for one and unseen by the other.
+
+---
+
+_Source data: 24 PlanetScope SuperDove scenes, 789 labelled vehicles, two trained models and eight confidence
+thresholds, in `data/results.csv` (336 rows) and `data/threshold_sweep.csv` (28 thresholds per model), both
+derived from the per-detection records in `data/detections_*.csv`. Method described in the companion methodology
+report._

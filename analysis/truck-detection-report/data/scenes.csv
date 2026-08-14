@@ -1,0 +1,25 @@
+scene,corridor,split,date,crs,width_px,height_px,valid_km2,windows,labelled_vehicles
+Bellingham_01_20260425,blaine-bellingham/I-5-north,trained,2026-04-25,EPSG:32610,4309,5750,3.274,418,11
+Centralia_01_20260511,Centralia/I-5-south,trained,2026-05-11,EPSG:32610,1596,5393,2.2,290,56
+Centralia_02_20260511,Centralia/I-5-south,trained,2026-05-11,EPSG:32610,1855,7333,2.235,300,56
+Ellensburg-Yakima_01_20260409,Ellensburg (arid),trained,2026-04-09,EPSG:32610,1935,7454,5.876,648,8
+EllensburgPreferredTest_01_20260530,Ellensburg (arid),trained,2026-05-30,EPSG:32610,2427,1530,13.476,1187,2
+Ellensburg_01_20260504,Ellensburg (arid),trained,2026-05-04,EPSG:32610,734,777,0.475,54,13
+Stanwood_10_20260511,Stanwood,trained,2026-05-11,EPSG:32610,1200,2496,1.342,160,6
+Tacoma-Centralia_01_20260429,Centralia/I-5-south,held-out:temporal,2026-04-29,EPSG:32610,3888,7410,4.44,574,80
+Tacoma-Centralia_02_20260602,Centralia/I-5-south,trained,2026-06-02,EPSG:32610,3493,7396,4.548,588,89
+Tacoma-Centralia_03_20260527,Centralia/I-5-south,unseen,2026-05-27,EPSG:32610,3888,8428,4.471,578,0
+Tri-Cities-New_01_20260611,Tri-Cities (arid),trained,2026-06-11,EPSG:32611,12295,8836,19.644,2604,105
+Yakima-Toppenish_01_20260503,Yakima (arid),trained,2026-05-03,EPSG:32610,7296,6704,12.729,1348,25
+Yakima-Toppenish_02_20260509,Yakima (arid),trained,2026-05-09,EPSG:32610,7296,6704,12.668,1350,31
+Yakima-Toppenish_03_20260614,Yakima (arid),trained,2026-06-14,EPSG:32610,7296,6704,12.691,1349,27
+Yakima-Toppenish_04_20260620,Yakima (arid),trained,2026-06-20,EPSG:32610,7296,6704,12.694,1353,43
+auburn-snoqualmie_01_20260425,auburn-snoqualmie/I-90,trained,2026-04-25,EPSG:32610,8561,7486,7.109,747,24
+auburn-snoqualmie_03_20260614,auburn-snoqualmie/I-90,trained,2026-06-14,EPSG:32610,8562,7531,6.257,677,42
+auburn-snoqualmie_04_20260504,auburn-snoqualmie/I-90,unseen,2026-05-04,EPSG:32610,8476,6914,6.44,676,0
+blaine-bellingham_01_20260425,blaine-bellingham/I-5-north,trained,2026-04-25,EPSG:32610,6384,9349,12.064,1280,18
+blaine-bellingham_02_20260528,blaine-bellingham/I-5-north,trained,2026-05-28,EPSG:32610,7342,9609,11.149,1180,50
+blaine-bellingham_03_20260504,blaine-bellingham/I-5-north,trained,2026-05-04,EPSG:32610,6005,8891,11.616,1234,29
+polygon_01_20260503,polygon (Kent/Auburn),trained,2026-05-03,EPSG:32610,2644,4565,12.49,1318,19
+spokane-i90_01_20260622,Spokane (arid),trained,2026-06-22,EPSG:32611,10328,3959,20.149,2240,55
+spokane-pullman_01_20260511,Spokane (arid),unseen,2026-05-11,EPSG:32611,1509,8444,5.441,572,0

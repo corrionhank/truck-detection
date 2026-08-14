@@ -5,6 +5,39 @@ Running log of what changed and what we learned. Newest first. For the current d
 
 ---
 
+## 2026-08-13 — Inference-record collection, results report, and a post-processing finding
+
+- **New `src/collect_inference.py`** — one pass per scene at threshold 0 recording **every** detection (not just
+  the per-window top-1) with 44 fields: all three keypoints in pixels and UTM, box, confidence, the three
+  `keypoints_scores`, derived echo geometry (streak length, B–R/R–G spacing, collinearity, bearing), and the
+  match result against labels. Because the confidence threshold, duplicate radius and any score/geometry gate
+  are filters over these records, arbitrary operating points are now evaluable offline without re-running
+  inference. Writes `detections.csv`, `stats.csv`, `scenes.csv`, `manifest.json` per model.
+- **`stats.csv` now carries both matching conventions.** `tp`/`recall` are the original non-consuming counts;
+  `tp_greedy`/`recall_greedy` credit each label at most once, greedy by descending confidence. They agree on
+  `tp` in all 126 scene×threshold rows, but `recall` is inflated in 11 of them (max +0.091) where one detection
+  falls within 18 m of two labels. **`recall_greedy` is the correct one**; `detect_scene.py` still divides two
+  different TP counts (labels for recall, detections for precision) and feeds the registry and model cards.
+- **Finding: the operating point was worth more than three training generations.** Sweeping (keypoint-score
+  gate × confidence × duplicate radius) offline on the stored records takes `kprcnn-adamiak-v2` from
+  **F1 0.480 → 0.690** (precision 0.507 → 0.693, recall 0.455 → 0.687, count ratio 0.90 → 0.99) at gate 8.0,
+  threshold 0.05, 8 px dedup, all detections per window. Validated leave-one-scene-out on the operating point:
+  identical 0.690, and all 21 folds chose the same setting. **Not yet implemented** — `detect_scene.py` still
+  discards `keypoints_scores` entirely. See [docs/KEYPOINT_GATE.md](docs/KEYPOINT_GATE.md).
+- **This reverses the earlier ranking.** `docs/NEXT_APPROACH.md` concluded that tuned `warmup-v1` beat
+  `adamiak-v2`; that came from a grid capped at gate ≤ 4, and adamiak-v2's optimum is 8.0. The gate scale is
+  per-model and does not transfer (adamiak-v2 8.0, warmup-v1 3.5), so it must be a stored per-model parameter.
+- **`src/export_coco.py`, `src/model_registry.py`, `src/train_detector.py`** — added plain-language section
+  comments explaining the approach and the reasoning behind each stage (chips, augmentation ordering, jitter,
+  transfer learning, the two recall metrics, the training-loop guards, anchors, the scene-name join). Comments
+  only; no behaviour change, verified by rebuilding `warmup-v1`'s graph at 59,078,246 parameters.
+- **New R analysis project** at `analysis/truck-detection-report/` — results report, methodology report and
+  threshold analysis, all computed from the per-detection records. Regenerated `results.csv` to 336 rows
+  (21 scenes × 2 models × 8 thresholds), reproducing all 252 prior rows exactly before adding 0.7 and 0.9.
+- Console: Scenes tab gains per-model trained/held-out/unseen badges, removal and import.
+
+---
+
 ## 2026-07-29 — Per-scene CRS: data → 789/21, first arid corridors (Tri-Cities, Spokane)
 
 - **Dropped the project-wide EPSG:32610 requirement from the training path.** The join only ever needed a

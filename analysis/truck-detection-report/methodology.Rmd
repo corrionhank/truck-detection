@@ -1,0 +1,428 @@
+---
+title: "Detection methodology"
+subtitle: "The moving-echo truck detector — architecture, mathematics, inputs and outputs"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+    toc_depth: 2
+    number_sections: true
+    theme: flatly
+    df_print: kable
+    fig_width: 9
+    fig_height: 5
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, dpi = 150, fig.retina = 2)
+suppressPackageStartupMessages({library(readr); library(dplyr); library(ggplot2); library(tibble)})
+theme_set(theme_minimal(base_size = 11) +
+  theme(panel.grid.minor = element_blank(),
+        plot.title = element_text(face = "bold", size = 13),
+        plot.subtitle = element_text(colour = "grey35", size = 10),
+        plot.caption = element_text(colour = "grey45", size = 9, hjust = 0),
+        legend.position = "top", legend.title = element_blank()))
+```
+
+# The model
+
+The detector is a **Keypoint R-CNN** — a two-stage convolutional object detector with an additional head that
+localises a fixed number of landmark points on every detected object. It is implemented with the torchvision
+reference model `keypointrcnn_resnet50_fpn`, using a ResNet-50 backbone with a Feature Pyramid Network, and
+comprises 59.1 million trainable parameters.
+
+Two trained instances are in current use. `kprcnn-adamiak-v2` was trained in July 2026 on nine scenes and serves
+as the project baseline. `kprcnn-warmup-v1` was trained later on twenty scenes with learning-rate warmup,
+translation-jitter augmentation and multi-vehicle chip targets. Both share the architecture described here and
+differ only in training data and optimisation schedule.
+
+The model is configured for two classes — a single foreground class named `moving_echo` plus the implicit
+background class — and three keypoints per detection. It is trained and run entirely on CPU, because the
+detection operations it depends on are numerically unstable on the Apple Metal backend available on the
+development machine.
+
+# What the model is looking for
+
+PlanetScope SuperDove satellites do not expose their spectral bands simultaneously. Each band is read from a
+different row of the sensor's focal plane, so the satellite advances slightly between one band's exposure and the
+next. For stationary ground this is invisible, because the bands register on top of one another. For a moving
+vehicle it is not: the vehicle occupies a different ground position in each exposure, so rather than appearing as
+a single object it smears into a short colour-separated streak — a blue blob, then a red blob, then a green blob,
+strung out along the direction of travel. The readout order is blue, then red, then green, which makes the streak
+directional and therefore informative about heading.
+
+This matters because of scale. At three metres per pixel a passenger car covers roughly one pixel and a truck two
+to six. Detecting an object that small directly is close to hopeless. The streak it leaves, however, spans a far
+larger footprint — a median of about 34 metres end to end in this dataset, roughly ten times the length of the
+vehicle producing it — and has a tri-colour structure that natural terrain rarely reproduces. The detector
+therefore does not search for trucks. It searches for the three-point colour signature a moving truck leaves
+behind, and infers the truck from it.
+
+```{r fig-streak}
+det <- read_csv("data/detections_warmup-v1.csv", show_col_types = FALSE,
+                col_select = c(labelled, is_window_top1, matched_bool, streak_len_m)) |>
+  filter(labelled == 1, is_window_top1 == 1, matched_bool == 1)
+ggplot(det, aes(streak_len_m)) +
+  geom_histogram(bins = 45, fill = "#2a78d6", alpha = 0.85) +
+  geom_vline(xintercept = median(det$streak_len_m), linetype = "dashed", colour = "grey25") +
+  annotate("text", x = median(det$streak_len_m) + 3, y = Inf, vjust = 1.6, hjust = 0,
+           label = sprintf("median %.0f m", median(det$streak_len_m)), size = 3.4, colour = "grey25") +
+  scale_x_continuous(limits = c(0, 90)) +
+  labs(title = "Echo length, blue keypoint to green keypoint",
+       subtitle = "Detections that matched a hand label; a pixel is three metres.",
+       x = "streak length (metres)", y = "detections")
+```
+
+The streak's length is proportional to the vehicle's speed, since a faster truck travels further between
+exposures. Converting that into an absolute velocity requires the inter-band time interval for each scene, which
+has not yet been obtained, so velocity recovery remains unimplemented.
+
+# Inputs
+
+## Imagery
+
+The imagery is PlanetScope `PSScene` data in the `analytic_8b_sr_udm2` bundle, captured by the PSB.SD SuperDove
+instrument. Each scene is an eight-band unsigned 16-bit GeoTIFF of Surface Reflectance at three metres per pixel,
+delivered in a UTM projection — EPSG:32610 for western Washington and EPSG:32611 for eastern — with zero used as
+the nodata value outside the clipped corridor.
+
+The imagery is never reprojected, warped or resampled at any point in the pipeline. This is the single most
+important input constraint, and it follows directly from the nature of the signal: the thing being measured is a
+sub-pixel positional offset between bands, and any resampling interpolates neighbouring pixels together and
+smears that offset away. Scenes are consequently kept on their native grid in their native zone. Where a
+coordinate transform is unavoidable — because the annotation file and the raster disagree about projection — the
+annotation points are moved rather than the raster, since transforming point coordinates is exact arithmetic on a
+handful of numbers rather than a lossy interpolation over millions of pixels.
+
+Only three of the eight bands reach the model. Band 6 becomes the red channel, band 4 the green, and band 2 the
+blue, which reconstructs a true-colour image and, not coincidentally, captures the three exposures that form the
+echo.
+
+```{r bands}
+tibble(
+  band = 1:8,
+  name = c("Coastal Blue", "Blue", "Green I", "Green", "Yellow", "Red", "Red Edge", "NIR"),
+  role = c("unused", "blue channel — first exposure", "unused", "green channel — third exposure",
+           "unused", "red channel — second exposure", "unused", "unused")
+)
+```
+
+The five unused bands carry no part of the colour-separation signature, though whether red-edge or near-infrared
+contain independent information about the echo has never been tested.
+
+## Annotations
+
+Labels are stored in a GeoPackage as points in real-world coordinates rather than pixel coordinates, one row per
+keypoint. Each row carries a point geometry, an integer `vehicle_id` grouping the three points belonging to one
+vehicle, an integer `sequence` recording which exposure the point belongs to — one for blue, two for red, three
+for green — and a `scene` string naming the GeoTIFF the point belongs to. A vehicle is therefore exactly three
+rows sharing a `vehicle_id`, and any vehicle missing one of the three sequences is treated as incomplete and
+dropped during export.
+
+The labelling policy is deliberately conservative: only clear, well-formed echoes are marked, while blurry,
+malformed, over-bright and very small echoes are deliberately skipped. This decision propagates into every
+downstream metric, because the imagery contains real vehicles that are knowingly unlabelled. A detection landing
+on one of those is scored as a false positive even though the model was correct, which means reported precision
+is a lower bound rather than an estimate.
+
+# From reflectance to tensors
+
+Converting a scene into something the network can consume happens in two stages: a radiometric stretch that maps
+16-bit reflectance into an 8-bit image, and a geometric join that converts annotation coordinates into pixel
+positions.
+
+The stretch operates per scene and per band. For each of the three selected bands the second and ninety-eighth
+percentiles of the non-zero pixels are computed, and reflectance values are mapped linearly from that range onto
+zero to 255, with anything outside clipped to the endpoints. Formally, for a band $b$ with percentile bounds
+$p_{2}$ and $p_{98}$, a pixel value $v$ becomes
+
+$$v' = 255 \cdot \mathrm{clip}\!\left(\frac{v - p_{2}}{p_{98} - p_{2}},\; 0,\; 1\right)$$
+
+with nodata pixels forced to zero rather than stretched. Because the percentiles are recomputed for every scene,
+each scene is contrast-normalised against its own distribution. This makes scenes captured under different
+illumination or atmospheric conditions comparable to one another, at the cost that identical physical reflectance
+maps to different pixel values in different scenes. The same stretch code runs during training and during
+inference, so there is no mismatch between the two.
+
+The join converts map coordinates into pixel coordinates. Each annotation is first matched to its scene by the
+`scene` text field — never by spatial extent, because several scenes cover the same ground on different dates and
+a geometric join would assign one date's labels to another date's imagery. The points are then reprojected into
+the raster's own CRS if the two differ, and finally the raster's inverse affine transform converts each map
+coordinate into a fractional pixel column and row. Keypoints are carried as floating-point values throughout;
+rounding them to integers would introduce a systematic sub-pixel error in precisely the quantity the model is
+trying to predict.
+
+Finally, the 8-bit image is divided by 255 to produce floats in the unit interval, and torchvision's internal
+transform applies ImageNet channel normalisation — subtracting means of 0.485, 0.456 and 0.406 and dividing by
+standard deviations of 0.229, 0.224 and 0.225 — before the tensor reaches the backbone. This second
+normalisation exists because the backbone's pretrained weights were learned on data normalised that way.
+
+# Chip extraction
+
+The network trains on small crops rather than whole scenes. For every labelled vehicle the exporter cuts a
+96 × 96 pixel window centred on the mean of that vehicle's three keypoints, writes it as a PNG, and records the
+keypoints relative to the window's origin along with a bounding box derived from the keypoint extent plus three
+pixels of padding on each side. The current corpus of 789 labelled vehicles therefore produces 789 chips.
+
+The window is 96 pixels but the model consumes 64. The extra sixteen pixels on each side exist so the training
+loop can crop a 64-pixel window at a randomly chosen offset on every epoch, placing the vehicle at a different
+position within the chip each time it is seen. Without that margin every training example would have its vehicle
+at dead centre, and the network would learn that echoes appear in the middle of the frame — a rule that fails
+immediately at inference, where a sliding window presents vehicles at arbitrary offsets.
+
+Any other labelled vehicle falling wholly inside the same 96-pixel window is also annotated, which adds 497
+further targets on top of the 789 centred ones. Without this, a second truck sharing a chip with the first would
+be unlabelled, and the network would be explicitly taught that a real echo is background.
+
+One structural consequence deserves emphasis. Because every chip is centred on a vehicle, the background the
+network learns is always road surface and roadside terrain within roughly a hundred metres of a truck. It never
+sees field interior, rooftops or bare soil presented as labelled background, so its notion of "not a truck" is
+narrower than the terrain it must actually operate over.
+
+# Architecture
+
+## Backbone and feature pyramid
+
+The first stage is a ResNet-50 convolutional backbone wrapped in a Feature Pyramid Network. ResNet-50 processes
+the image through successive residual blocks, halving spatial resolution and doubling channel depth at each
+stage, so that later layers encode more abstract structure at coarser resolution. The Feature Pyramid Network
+then takes the outputs of several stages and combines them top-down, upsampling coarse semantic features and
+adding them to finer ones, producing five feature maps at different scales that all carry high-level semantic
+information. Small objects can therefore be detected on high-resolution maps without sacrificing the semantic
+depth that only deeper layers provide.
+
+The backbone enters training with weights pretrained on COCO. The detection heads do not, because their output
+dimensions depend on the number of classes and keypoints, which differ from COCO's 91 classes and 17 human body
+keypoints. Both heads are replaced and randomly initialised.
+
+## Region proposal network
+
+The second stage proposes candidate object locations. At every spatial position of every pyramid level the
+network places a set of reference boxes called anchors, and a small convolutional head predicts, for each anchor,
+an objectness logit and four numbers describing how to adjust the anchor into a better-fitting box.
+
+Anchors are the most consequential setting for this problem. The torchvision defaults span 32 to 512 pixels,
+which is far too large for a two-to-six-pixel echo, so a custom set of five sizes — 4, 8, 16, 32 and 48 pixels,
+one per pyramid level — is used, crossed with five aspect ratios of 0.25, 0.5, 0.75, 1.0 and 1.25. That gives 25
+anchors per spatial location.
+
+A subtlety affects how those numbers should be read. Chips are 64 pixels but torchvision resizes its input so the
+shorter side is 192 pixels, a threefold upscale. Anchors therefore operate in resized space, not native chip
+space: a nominally four-pixel anchor corresponds to about 1.3 native pixels, while a native four-to-eight-pixel
+echo becomes twelve to twenty-four pixels after resizing and is matched by the middle anchors rather than the
+smallest ones. The resize is already doing much of the scale-matching work that small anchors were introduced to
+provide, and any future anchor tuning must reason in resized space to avoid compounding the two effects.
+
+During training each anchor is assigned a label by its intersection-over-union with the ground-truth boxes. An
+anchor overlapping a target by more than 0.7 is positive, one overlapping by less than 0.3 is negative, and
+anything between is ignored. From these, 256 anchors are sampled per image with a target of half positive, and
+the objectness head is trained with binary cross-entropy on that sample. Box regression uses the standard
+parameterisation, in which the network predicts offsets relative to the anchor rather than absolute coordinates:
+
+$$t_x = \frac{x - x_a}{w_a}, \qquad t_y = \frac{y - y_a}{h_a}, \qquad t_w = \log\frac{w}{w_a}, \qquad t_h = \log\frac{h}{h_a}$$
+
+where $(x, y, w, h)$ is the target box and the subscript $a$ denotes the anchor. Predicting offsets normalised by
+anchor size makes the regression scale-invariant, and the logarithm on width and height keeps the target
+symmetric between growing and shrinking. The regression is trained with a smooth $L_1$ loss, which behaves
+quadratically near zero and linearly further out, making it less sensitive to outliers than squared error. Only
+positive anchors contribute. At inference the proposals are ranked by objectness, the top thousand are kept, and
+non-maximum suppression at an IoU of 0.7 removes duplicates.
+
+## Box head
+
+Surviving proposals pass to the box head. Because proposals have arbitrary sizes and neural networks need fixed
+input dimensions, features are extracted with RoIAlign, which samples a fixed 7 × 7 grid from each proposal's
+region of the feature map using bilinear interpolation. RoIAlign avoids the quantisation that its predecessor
+RoIPool introduced by rounding region boundaries to integer positions — a rounding error of half a pixel, which
+is negligible for large objects but material when the object is only a few pixels across.
+
+The 7 × 7 × 256 output is flattened into a 12,544-element vector and passed through two fully connected layers of
+1024 units each, from which two linear heads emerge: one producing class logits and one producing box refinements
+for each class. Classification is trained with softmax cross-entropy over the two classes, and refinement with
+smooth $L_1$ on the same offset parameterisation used by the proposal network, though with the deltas scaled by
+weights of 10, 10, 5, 5 so translation and size errors contribute comparably to the gradient. Proposals are
+assigned to targets at an IoU threshold of 0.5, and 512 are sampled per image with a quarter positive.
+
+## Keypoint head
+
+The keypoint head is what distinguishes this model from an ordinary detector, and it is where the moving-echo
+structure is actually recovered.
+
+Features are pooled from each detection at 14 × 14 resolution and passed through eight convolutional layers of
+512 channels, then a transposed convolution upsamples the result and a final interpolation brings it to
+**56 × 56**. The output is three such maps per detection — one for the blue keypoint, one for red, one for green.
+
+The important design decision is that keypoint localisation is posed as **classification, not regression**. Each
+56 × 56 map is flattened into 3,136 positions, and the network is trained to predict which single position
+contains the keypoint, using softmax cross-entropy against a one-hot target. Writing $\ell_{k,i}$ for the logit
+of keypoint $k$ at position $i$ and $i^{*}_{k}$ for the true position, the loss is
+
+$$\mathcal{L}_{\text{kp}} = -\frac{1}{K}\sum_{k=1}^{K} \log \frac{\exp\!\left(\ell_{k,\,i^{*}_{k}}\right)}{\sum_{j=1}^{3136} \exp\!\left(\ell_{k,\,j}\right)}$$
+
+Treating position as a categorical variable rather than a continuous one lets the network express uncertainty
+across the whole spatial field and produces sharper localisation than direct coordinate regression, which tends
+to average over ambiguity. At inference the predicted keypoint is the arg-max position of its heatmap, and the
+logit value at that peak is returned as the keypoint's confidence.
+
+That confidence is worth dwelling on. It is the raw pre-softmax logit at the peak, so it is unbounded rather than
+a probability — values in this dataset range from about −4 to +8 — and only its ordering is meaningful. It
+measures how sharply peaked the heatmap is, which is a different question from the one the box classifier answers.
+A patch of bright field texture can look sufficiently object-like to score well on the box head while producing
+three flat, diffuse keypoint maps, because there is no crisp blue-red-green triple to lock onto. Empirically the
+keypoint confidence separates correct from spurious detections better than the box score does, with an ROC area
+of 0.891 against 0.771, despite the fact that the deployed inference code reads only the box score and discards
+the keypoint confidences entirely.
+
+## The composite loss
+
+Training minimises the unweighted sum of five terms: the proposal network's objectness and box-regression losses,
+the box head's classification and refinement losses, and the keypoint head's cross-entropy. No relative weighting
+is applied, so the gradient balance between localisation and classification is whatever the default magnitudes
+happen to produce. Tuning those weights is an untried avenue.
+
+# Training procedure
+
+Optimisation uses Adam at a base learning rate of $10^{-3}$, with gradients clipped to a global norm of 1.5 to
+prevent occasional large updates from destabilising the fresh heads. Batches contain four chips, and each vehicle
+is drawn three times per epoch with independently sampled augmentation. Runs last twelve to sixteen epochs.
+
+The learning rate is not constant. For the first 300 iterations it ramps linearly from $10^{-5}$ to $10^{-3}$.
+This warmup exists because the detection heads begin from random weights, and their initial gradients at full
+rate are large enough to destabilise the model — in one run without warmup the loss climbed from 9 to 528 within
+two iterations, which forced a permanent tenfold reduction in learning rate and left that model undertrained.
+After warmup, `ReduceLROnPlateau` monitors validation loss and multiplies the rate by 0.3 whenever two
+consecutive epochs fail to improve, down to a floor of $10^{-5}$.
+
+Augmentation is applied to the full 96-pixel chip before the 64-pixel crop is taken, so that rotation draws in
+genuine neighbouring imagery rather than mirrored padding. Horizontal and vertical flips are each applied with
+probability one half, rotation is uniform over the full circle, a mild perspective warp displaces the corners by
+up to five pixels, and brightness is scaled multiplicatively between 0.8 and 1.2. Every geometric transform is
+applied to the keypoint coordinates as well as to the pixels. Translation is handled separately, by the random
+crop offset rather than by warping, so it introduces no interpolation at all — the vehicle simply appears at a
+different place in a window of real pixels.
+
+Validation is a random subset of chips, the larger of eight or twelve percent, drawn from the training scenes. It
+drives both the learning-rate schedule and the selection of which epoch to keep. This is a known weakness:
+because validation shares scenes with training, it measures fit to already-familiar backgrounds rather than
+generalisation, so best-epoch selection is biased toward models that have memorised training-scene context.
+Splitting validation by scene rather than by chip is a recommended change that has not yet been made.
+
+# Inference
+
+Training operates on 64-pixel chips centred on vehicles. Deployment must find vehicles in a scene of arbitrary
+size with no prior knowledge of where they are, and that gap is bridged with a sliding window.
+
+The scene is rendered through the same band selection and percentile stretch used in training. Pixels where all
+three channels are zero are marked as nodata. A grid of 64 × 64 windows is then placed across the scene at a
+stride of 40 pixels, giving 24 pixels of overlap, and a window is evaluated only if at least fifteen percent of
+it contains valid imagery. Surviving windows are batched twelve at a time through the network.
+
+The overlap is deliberate. A vehicle is normally seen by more than one window, at different offsets within each,
+which is precisely why the model must tolerate off-centre echoes and why translation jitter during training
+matters.
+
+What happens to the model's output next is where the pipeline currently loses the most. Detections scoring below
+the confidence threshold are discarded, which is expected. But then **only the highest-scoring detection in each
+window is retained**, so two trucks falling in the same 64-pixel window cannot both be reported. The survivors
+are then deduplicated greedily in descending score order, suppressing any detection whose red keypoint lies
+within 32 pixels of one already kept — a radius of 96 metres on the ground, which merges genuinely adjacent
+trucks on a freeway. Finally the red keypoint of each surviving detection is mapped back to map coordinates
+through the raster's affine transform.
+
+Both of those reductions were measured, and both are costly. With top-one-per-window and deduplication disabled
+at a threshold of zero, every one of the eighty labelled trucks on a test scene has a detection within eighteen
+metres. The model finds the trucks; the post-processing discards them.
+
+# Outputs
+
+For each window the model returns five parallel arrays, holding up to one hundred detections.
+
+```{r outputs}
+tibble(
+  field = c("boxes", "labels", "scores", "keypoints", "keypoints_scores"),
+  shape = c("(N, 4)", "(N,)", "(N,)", "(N, 3, 3)", "(N, 3)"),
+  contents = c("box corners in resized-chip pixels",
+               "class index, always 1",
+               "box classifier confidence, 0 to 1",
+               "x, y and visibility per keypoint, in blue-red-green order",
+               "per-keypoint peak logit, unbounded"),
+  `read by the pipeline` = c("no", "no", "yes", "yes", "no")
+)
+```
+
+Three of the five are computed and thrown away. The boxes are never read, because matching is done on keypoint
+distance rather than box overlap. The labels are uninformative given a single foreground class. The keypoint
+confidences are discarded despite being the most discriminative signal the model produces, which is the largest
+identified inefficiency in the current pipeline.
+
+A hard floor also exists inside the model: detections scoring below 0.05 are dropped internally before any
+application code sees them, so 0.05 is the lowest threshold recoverable without re-running inference.
+
+One property of the confidence score has practical consequences worth stating explicitly. The threshold is a
+filter applied after detection, not a parameter of detection — it changes which detections survive, not which are
+found. Recording every detection together with its score therefore allows any higher threshold to be evaluated
+afterwards by simple filtering, so a sweep of dozens of thresholds costs seconds rather than repeated inference
+runs. Deduplication commutes with that filtering, because it proceeds in descending score order and a
+lower-scoring detection can never suppress a higher-scoring one, so the reconstruction is exact rather than
+approximate. This was verified across every scene and threshold combination in the dataset.
+
+Beyond the raw model output, the collection pipeline persists derived quantities per detection: the three
+keypoints in both pixel and map coordinates, the box and its dimensions, all four confidence values, and the echo
+geometry — streak length in pixels and metres, the two segment lengths, their ratio, the perpendicular deviation
+of the red keypoint from the line joining blue and green, and the bearing. Evaluation fields record the distance
+to the nearest label, which label was matched, and the keypoint localisation error where a match occurred.
+
+# Evaluation
+
+A detection is judged correct if its red keypoint lies within six pixels — eighteen metres — of a labelled
+vehicle's red keypoint, and each label may be claimed by at most one detection.
+
+This departs from standard object-detection practice, which matches by bounding-box intersection-over-union.
+Two reasons motivate the departure. A two-to-six-pixel echo has a box so small that IoU becomes dominated by
+quantisation noise, and the red keypoint is the physically meaningful anchor, marking the vehicle's position at
+the middle exposure. The consequence is that these figures are not directly comparable to published results:
+Adamiak and colleagues report a mean average precision of 0.59 using COCO's object keypoint similarity, and Van
+Etten reports an F1 of 0.49 using segmentation-based matching, and neither uses the metric applied here.
+
+From the matching, true positives are detections within the radius, false positives are detections without a
+nearby label, and false negatives are labels without a nearby detection. Precision, recall and their harmonic
+mean follow conventionally. A count ratio — detections divided by labelled vehicles — is also tracked, since the
+programme's actual deliverable is aggregate truck counts rather than per-vehicle identification. There is no true
+negative: a window producing no detection generates no record, so accuracy and specificity are undefined for this
+task.
+
+Per-scene results are combined in two ways, and the distinction matters. Micro-averaging sums true positives,
+false positives and false negatives across scenes before computing the metric once, which weights scenes by
+vehicle count and lets large scenes dominate. Macro-averaging computes the metric per scene and then averages,
+weighting every scene equally so that a two-vehicle scene counts as much as a hundred-vehicle one. Both are
+reported, and a divergence between them indicates that performance correlates with scene size.
+
+# Known limitations
+
+The most consequential limitation is the labelling policy. Because only clear echoes are marked, the imagery
+contains real vehicles that are deliberately unlabelled, so precision is a lower bound and every F1 figure
+understates the model by an unknown margin. Establishing the true rate requires exhaustively labelling at least
+one scene, which has not been done.
+
+The training data has no background-only chips. Torchvision samples hundreds of negative regions inside every
+chip, so the model does see abundant examples of "not a truck" — but because every chip is centred on a vehicle,
+those negatives are all drawn from road and near-road terrain. Field interior, rooftops and bare soil never
+appear as labelled background, which is a plausible cause of spurious detections over unfamiliar ground.
+
+All imagery falls within a single spring window spanning April to June, so seasonal robustness is entirely
+untested, and agricultural corridors in particular will look substantially different at other times of year.
+
+Validation shares scenes with training, so best-epoch selection is biased. No scene in the current corpus is
+genuinely out-of-sample for both trained models, which means no clean measurement of transfer to unseen ground
+exists anywhere in the project. And the post-processing discards detections the model successfully made, so
+reported recall understates the network's actual detection capability by a wide margin.
+
+---
+
+_Architecture and hyperparameters verified against the installed torchvision implementation and the project
+source: `src/export_coco.py`, `src/train_detector.py`, `src/detect_scene.py`, `src/model_registry.py`,
+`src/collect_inference.py`. Reference method: Adamiak et al. 2025, Int. J. Applied Earth Observation and
+Geoinformation 142:104707._

@@ -55,6 +55,22 @@ CHIP, HALF = 64, 32
 
 
 # ---------------------------------------------------------------- data ------
+# WHAT THE MODEL ACTUALLY SEES
+#
+# We never hand the network a whole satellite scene. A scene is ~4000x4000 px of mostly empty
+# ground, and the thing we want is 3-5 px across — the network would spend all its capacity on
+# field and rooftop. Instead export_coco.py cuts one small square ("chip") centred on each
+# labelled vehicle, and we train on those. At inference time detect_scene.py slides a window of
+# the same size across the full scene, so the model only ever sees one chip-sized view either way.
+#
+# Two details worth teaching:
+#   - Chips are grouped BY SCENE, not thrown in one pile, because we evaluate leave-one-scene-out.
+#     Holding out random vehicles would let the model memorise a scene's lighting and road colour
+#     from its other vehicles and score well without having learned anything transferable.
+#   - A chip carries the centre vehicle FIRST, then any neighbour whose echo also fell inside the
+#     window. On a busy freeway trucks are close together, so a neighbour lands in frame often. If
+#     we labelled only the centre one, every neighbour would be taught to the model as background —
+#     we would be actively training it to ignore real trucks.
 def load_coco():
     """{scene: [(chip uint8 SxSx3, kps float32[N,3,2] center-vehicle-first, in export px), ...]}.
 
@@ -78,6 +94,24 @@ def load_coco():
 
 
 # ------------------------------------------------- augmentation (Adamiak) ---
+# MAKING A FEW HUNDRED LABELS LOOK LIKE MANY THOUSANDS
+#
+# A network this size wants far more examples than we have. Augmentation gets there by showing the
+# same vehicle differently every epoch: flipped, rotated, slightly brightened, slightly warped. The
+# model sees a fresh image each time and cannot memorise any single one.
+#
+# Rotation by any angle is legitimate here in a way it is not for most vision tasks. A photo of a
+# car has an up; a satellite echo does not — roads run in every direction, so a streak at 200 deg is
+# a perfectly real thing to see. That makes full 360 deg rotation free extra data rather than a lie.
+#
+# The ordering matters and is the easiest thing to get wrong. We rotate the LARGER exported image
+# (96 px) and crop the 64 px training chip afterwards. Rotate a 64 px chip directly and the corners
+# have no source pixels, so they get filled with mirrored padding — and the model happily learns to
+# recognise that mirrored texture, which exists nowhere in a real scene. Rotating the padded export
+# means the corners get filled with genuine neighbouring ground instead.
+#
+# Translation is deliberately NOT done here. Shifting an image leaves the same empty-corner problem,
+# so it is handled in ChipDS by moving the crop window instead — real pixels, nothing invented.
 def augment(img, pts, rng, size):
     """Adamiak's augmentation: rotation, H/V flips, brightness, perspective — applied to the
     SxS image AND all (M,2) keypoints in image space. Runs on the full export (e.g. 96px) BEFORE
@@ -107,6 +141,18 @@ def augment(img, pts, rng, size):
     return np.ascontiguousarray(c), k
 
 
+# THE ANSWER KEY WE HAND THE MODEL
+#
+# For each training chip torchvision expects a "target": for every vehicle in it, a box, a class
+# label, and the keypoints. We care about the keypoints, so why a box at all? Because an R-CNN works
+# in two stages — first it proposes regions that might contain something, then it looks inside a
+# chosen region to place keypoints. It needs a region to be graded on. So we derive the box from the
+# keypoints themselves: the smallest rectangle containing all three, plus 3 px of padding.
+#
+# labels = 1 everywhere because we have exactly one class, "moving echo"; class 0 is background and
+# is never listed explicitly — anything not covered by a box is background by omission. The trailing
+# "2" appended to each keypoint is torchvision's visibility flag, meaning "labelled and visible",
+# which is always true here since an annotator only marks blobs they can actually see.
 def to_target(kps):
     """torchvision Keypoint R-CNN target for N vehicles in a chip: N boxes + N labels + N
     keypoint-triples, all clipped into CHIP space. kps is float32[N,3,2]."""
@@ -128,6 +174,22 @@ def to_target(kps):
     }
 
 
+# WHY THE CROP MOVES AROUND (translation jitter)
+#
+# export_coco.py centres each vehicle in its exported image. Train on those directly and every truck
+# the model has ever seen sat in the exact middle of the frame — so it partly learns "the truck is
+# in the middle" as if that were a property of trucks. At inference the sliding window lands wherever
+# it lands and the truck is usually off-centre, so that shortcut quietly costs recall.
+#
+# The fix: export a 96 px image, then each epoch cut the 64 px training chip at a RANDOM offset. The
+# vehicle now appears left, right, high, low — but always drawn from real pixels, because the margin
+# we are sliding into is genuine surrounding ground. Nothing is invented or mirrored.
+#
+# _offset() picks that random origin under one hard constraint: the crop must still contain the
+# centre vehicle's keypoints. It computes the legal range of origins and draws inside it, so the
+# jitter can never cut a vehicle in half and produce a wrong answer key. Validation uses the exact
+# centre crop instead (jitter off), because a validation number that moves for random reasons cannot
+# be compared between epochs.
 class ChipDS(torch.utils.data.Dataset):
     """Serves CHIP-sized (64px) training tensors cropped from the SxS export chips. When S > CHIP
     (padded export) the crop origin is jittered every epoch — real-pixel translation augmentation —
@@ -178,6 +240,21 @@ def collate(b):
 
 
 # ----------------------------------------------------------------- model ----
+# BORROWING MOST OF THE NETWORK INSTEAD OF LEARNING IT (transfer learning)
+#
+# A ResNet-50 has ~25 M parameters in its feature extractor alone. Learning that from a few hundred
+# labelled trucks is hopeless. But the early layers of any vision network learn generic things —
+# edges, corners, blobs, texture — that are the same whether the input is a photograph of a dog or a
+# satellite tile. So we take the backbone from a model already trained on COCO (millions of ordinary
+# photographs) and keep it, which is the single reason this works at our label count.
+#
+# The heads on top are built fresh, and must be: COCO's model predicts 80 classes and 17 human body
+# keypoints, ours predicts 1 class and 3 band positions, so the final layers are the wrong shape.
+# They are also the layers that encode what the task IS, which is exactly the part we want learned
+# from our data rather than inherited.
+#
+# The trade this makes: the network starts out good at seeing and knowing nothing about trucks,
+# instead of starting out ignorant of both.
 def build_finetune(arch):
     """Custom-anchor graph from the registry builder, with the COCO-pretrained ResNet-50 +
     FPN backbone injected (the transferable part). The detection heads (RPN / box / keypoint)
@@ -191,6 +268,18 @@ def build_finetune(arch):
 
 
 # ----------------------------------------------------------------- eval -----
+# TWO RECALL NUMBERS THAT MEAN VERY DIFFERENT THINGS — DO NOT CONFLATE THEM
+#
+# eval_centered() asks the easy question: given a chip with a truck already centred in it, does the
+# model notice? It scores ~0.97, and it is nearly meaningless on its own — we handed it the answer's
+# location. It is still worth measuring, because if it ever drops the model is broken outright.
+#
+# eval_full_scene() asks the real question: turned loose on a raw scene with no hints, sliding across
+# thousands of windows of mostly empty ground, how many trucks does it find and how much of what it
+# reports is real? That is the number the project lives or dies by, and it is far lower (~0.50 F1).
+#
+# The gap between the two is the entire difficulty of the task: recognising a truck you have been
+# pointed at is easy; finding it unaided among tens of thousands of look-alike patches is not.
 @torch.no_grad()
 def eval_centered(model, items, thresh):
     """Centered-chip recall on the held-out scene: the center CHIP crop per vehicle (96->64)."""
@@ -224,6 +313,29 @@ def eval_full_scene(model, scene, thresh):
 
 
 # ---------------------------------------------------------------- train -----
+# THE TRAINING LOOP, AND THE FOUR GUARDS AROUND IT
+#
+# The loop itself is ordinary: show the model a batch, it returns how wrong it was (the loss), the
+# gradient says which direction each weight should move, the optimiser (Adam) takes a step. Repeat
+# for a set number of passes over the data (epochs). Everything below is the machinery that keeps
+# that loop from going wrong in ways we have actually been bitten by:
+#
+#   1. DEVICE CHOICE. Apple's GPU (MPS) runs this model but silently produces garbage — the loss
+#      drifts to NaN with no error raised. So we probe it with a few real steps and fall back to CPU
+#      unless the numbers stay sane. Slow and correct beats fast and wrong.
+#   2. LEARNING-RATE WARMUP. The borrowed backbone is good; the fresh heads are random. At full
+#      learning rate from step one, the random heads take a huge step and blow up the whole model —
+#      we measured loss going 9 -> 528. Warmup starts at 1/100th of the rate and ramps up, letting
+#      the heads settle before they are allowed to move fast.
+#   3. GRADIENT CLIPPING. A single odd batch can produce an enormous gradient. Clipping caps its
+#      length, so one bad example cannot undo an epoch of progress.
+#   4. BEST-VAL CHECKPOINTING. More training is not monotonically better — at some point the model
+#      starts fitting quirks of the training scenes and gets worse on everything else. So after every
+#      epoch we score a held-back slice, keep whichever epoch scored best, and ship that one. An
+#      earlier run shipped its final epoch when an earlier epoch was measurably better.
+#
+# ReduceLROnPlateau handles the other end: when validation loss stops improving it cuts the learning
+# rate, which is how the model goes from broad strokes early to fine adjustments late.
 def _to(imgs, tgts, device):
     """Move a collated batch (tuple of images, tuple of target dicts) onto the device."""
     return ([im.to(device) for im in imgs],
@@ -377,6 +489,17 @@ def train(train_items, val_items, arch, epochs, batch, lr, repeat, seed, ckpt_pa
 
 
 # ----------------------------------------------------------- register + card
+# WHY EVERY RUN WRITES ITSELF DOWN
+#
+# Finishing a run produces three things: the weights, an entry in models/registry.json, and a
+# human-readable card. The registry entry is not bookkeeping for its own sake — it is required to
+# use the model again. The anchor sizes are part of the network's SHAPE, so weights trained with
+# one anchor set cannot be loaded into a graph built with another. Storing the architecture beside
+# the weights is what lets the console rebuild the right graph months later.
+#
+# It also makes the experiment log honest. Each entry records the exact scene list, epochs, learning
+# rate, augmentation and the resulting metrics, so a later comparison between two models is a
+# comparison of recorded configurations rather than of recollection.
 def card_md(entry, n_train, train_scenes, held, per_scene, mean_cen, mean_f1):
     a, t, m = entry["arch"], entry["train"], entry["metrics"]
     if held:
@@ -446,6 +569,18 @@ See [REFINEMENT.md](../../docs/REFINEMENT.md).
 """
 
 
+# CHECKING THAT "HELD OUT" REALLY MEANS HELD OUT
+#
+# The obvious leak is training and testing on the same scene NAME, and main() already refuses that.
+# This catches the non-obvious one. Most corridors here are the same patch of ground photographed on
+# different dates, so two differently-named scenes can cover nearly identical terrain. Test on one
+# having trained on the other and the model gets to recognise roads, buildings and field boundaries
+# it has already memorised — the score looks like generalisation but isn't.
+#
+# So we compare actual ground footprints, reprojected onto a common grid, and label each held-out
+# scene: "spatial" (genuinely new place — a real transfer test) or "temporal" (same ground, later
+# date — a much weaker claim). It warns rather than blocks, because a temporal test is still worth
+# running; it just must not be reported as proof the model works somewhere new.
 def footprint_split_check(train_scenes, held_scenes, decim=8):
     """Beyond the name-based leakage guard: reproject valid footprints to catch SPATIAL overlap a
     name split can't see (every corridor here is one footprint re-captured on different dates).
@@ -488,6 +623,19 @@ def footprint_split_check(train_scenes, held_scenes, decim=8):
     return labels
 
 
+# SPLITTING THE DATA — THE STEP MOST LIKELY TO PRODUCE A FLATTERING LIE
+#
+# Three separate roles, and mixing any two of them inflates the result:
+#   - TRAIN scenes: the model learns from these.
+#   - HELD-OUT scenes: never trained on, used once at the end for the honest score.
+#   - VAL: a small random slice carved out of the TRAINING chips. Its only job is to tell the
+#     learning-rate scheduler when progress has stalled and to pick the best epoch. It is drawn from
+#     training scenes on purpose, so the held-out scenes stay completely untouched until the end.
+#
+# The hard rule is leave-one-SCENE-out, never a random split of vehicles. Split randomly and the
+# same scene appears on both sides: the model sees that road's exact surface, lighting and vehicle
+# mix during training and is then tested on it. The score comes out much higher and means nothing,
+# because deployment always means a scene the model has never seen.
 def main(a):
     by_scene = load_coco()
     held = [s.strip() for s in a.held.split(",") if s.strip()]

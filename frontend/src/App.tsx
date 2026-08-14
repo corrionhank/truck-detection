@@ -1,5 +1,5 @@
 import { useEffect, useState, type ChangeEvent } from 'react'
-import { Truck, Play, Database, BarChart3, Layers, ScanLine, FileText, Loader2, Cpu, Images } from 'lucide-react'
+import { Truck, Play, Database, BarChart3, Layers, ScanLine, FileText, Loader2, Cpu, Images, BookOpen } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import annotationsSpec from './docs/annotations-spec.md?raw'
@@ -7,7 +7,7 @@ import annotationsSpec from './docs/annotations-spec.md?raw'
 // Sibling app (Satellite Data Tooling Hub) — the reciprocal nav target.
 const HUB_URL = 'http://localhost:5000/'
 
-type Tab = 'dataset' | 'scenes' | 'results' | 'models' | 'training' | 'inference' | 'spec'
+type Tab = 'dataset' | 'scenes' | 'results' | 'models' | 'training' | 'inference' | 'spec' | 'docs'
 
 type ModelEntry = {
   id: string
@@ -102,7 +102,7 @@ export default function App() {
             PlanetScope SuperDove imagery — the model half of the project.
           </p>
 
-          <div className="segmented" style={{ maxWidth: 760 }}>
+          <div className="segmented" style={{ maxWidth: 860 }}>
             <button className={tab === 'dataset' ? 'active' : ''} onClick={() => setTab('dataset')}>
               <Database size={14} /> Dataset
             </button>
@@ -124,6 +124,9 @@ export default function App() {
             <button className={tab === 'spec' ? 'active' : ''} onClick={() => setTab('spec')}>
               <FileText size={14} /> Spec
             </button>
+            <button className={tab === 'docs' ? 'active' : ''} onClick={() => setTab('docs')}>
+              <BookOpen size={14} /> Docs
+            </button>
           </div>
 
           {tab === 'dataset' && <DatasetView totalScenes={scenes.length} />}
@@ -133,6 +136,7 @@ export default function App() {
           {tab === 'training' && <TrainingView scenes={scenes} refresh={refreshModels} />}
           {tab === 'inference' && <InferenceView scenes={scenes} registry={registry} refreshScenes={refreshScenes} />}
           {tab === 'spec' && <SpecView />}
+          {tab === 'docs' && <DocsView />}
         </div>
       </main>
     </div>
@@ -395,6 +399,38 @@ function SpecView() {
   return (
     <div className="card">
       <Markdown>{annotationsSpec}</Markdown>
+    </div>
+  )
+}
+
+function DocsView() {
+  const [docs, setDocs] = useState<{ name: string; title: string }[]>([])
+  const [sel, setSel] = useState('')
+  const [md, setMd] = useState('')
+  useEffect(() => {
+    fetch('/api/docs').then((r) => r.json()).then((d) => {
+      setDocs(d.docs || [])
+      if (d.docs?.length) setSel(d.docs[0].name)
+    }).catch(() => setDocs([]))
+  }, [])
+  useEffect(() => {
+    if (!sel) return
+    setMd('')
+    fetch(`/api/docs/${sel}`).then((r) => r.json()).then((d) => setMd(d.markdown || '')).catch(() => setMd('_failed to load_'))
+  }, [sel])
+  return (
+    <div className="docs-layout">
+      <div className="docs-nav">
+        <div className="section-label" style={{ marginBottom: 6 }}>docs/</div>
+        {docs.map((d) => (
+          <button key={d.name} className={`docs-item ${sel === d.name ? 'active' : ''}`} onClick={() => setSel(d.name)}
+            title={d.name}>{d.title}</button>
+        ))}
+        {!docs.length && <span className="hint">no docs found</span>}
+      </div>
+      <div className="card docs-body">
+        {md ? <Markdown>{md}</Markdown> : <p className="hint">Loading…</p>}
+      </div>
     </div>
   )
 }

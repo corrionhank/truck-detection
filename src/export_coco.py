@@ -38,6 +38,18 @@ RED, GREEN, BLUE = 6, 4, 2
 SEQ_NAMES = {1: "blue", 2: "red", 3: "green"}
 
 
+# MAKING 16-BIT SATELLITE DATA VISIBLE (the contrast stretch)
+#
+# The raw bands are 16-bit reflectance, and almost all real values sit in a narrow slice of that
+# range — convert naively to an 8-bit image and everything is near-black. So per band we find the
+# 2nd and 98th percentile of the valid pixels and map that span onto 0-255, discarding the extreme
+# tails that would otherwise waste most of the available contrast.
+#
+# Two things to note. The percentiles are computed PER SCENE, so each scene is stretched by its own
+# statistics rather than a global constant — the same truck may end up slightly different in
+# brightness between scenes, which is part of why brightness augmentation exists downstream. And
+# nodata is 0 and is forced back to black afterwards, so the empty border outside the clipped
+# footprint never contributes contrast or gets mistaken for dark ground.
 def stretch_params(band, lo_pct=2, hi_pct=98):
     """Percentile stretch bounds over valid (nonzero) pixels; nodata is 0."""
     valid = band[band > 0]
@@ -96,6 +108,25 @@ def _annotation(px, x0, y0, export, ann_id, img_id, vid, is_center):
     }
 
 
+# TURNING ANNOTATIONS + GEOTIFFS INTO TRAINING CHIPS
+#
+# The labels live in a GeoPackage as real-world coordinates; the pixels live in the GeoTIFFs. This
+# function is the join between them, and there are three decisions in it worth understanding:
+#
+#   1. SCENES ARE MATCHED BY NAME, NOT BY LOCATION. It is tempting to assign each label to whichever
+#      scene's extent contains it, but several scenes here overlap on the ground, so an extent match
+#      would silently copy one scene's labels onto another's pixels. The `scene` text field decides.
+#   2. WE MOVE THE POINTS, NEVER THE RASTER. Washington spans two UTM zones, so labels and imagery
+#      sometimes disagree on coordinate system. Reprojecting the imagery would resample it, and
+#      resampling blurs the 1-3 px colour offset that IS the signal we are detecting. Reprojecting
+#      the points is exact arithmetic on a handful of coordinates, so the labels move instead. After
+#      this point everything is pixel space and coordinate systems are gone from the pipeline.
+#   3. WE EXPORT BIGGER THAN WE TRAIN. The window is chip + 2*margin (96 px for a 64 px chip). That
+#      spare border is what lets the trainer rotate and shift with real pixels instead of padding.
+#
+# Every vehicle gets its own chip, so a truck with three neighbours produces four chips, each
+# centred on a different one — the same pixels seen four ways, which is legitimate extra framing
+# variety rather than duplication.
 def main(chip, margin, out_dir, single):
     export = chip + 2 * margin          # exported image size; the model still crops `chip` from it at train time
     half_exp = export // 2

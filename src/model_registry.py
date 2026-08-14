@@ -43,6 +43,19 @@ def get(reg, model_id):
     return next((m for m in reg["models"] if m["id"] == model_id), None)
 
 
+# ANCHORS — THE ONE ARCHITECTURE KNOB THAT MATTERS MOST HERE
+#
+# Before an R-CNN can find anything it lays a grid of candidate boxes ("anchors") over the image at
+# fixed sizes, and asks of each: does something sit here, and how should this box be nudged to fit?
+# It can only find objects roughly the size of some anchor. torchvision's defaults are 32-512 px,
+# tuned for everyday photographs where the subject fills much of the frame. Our targets are 3-5 px
+# echoes — smaller than the smallest default anchor, which is why the stock configuration finds
+# nothing at all and why we pass sizes of 4/8/16/32/48 instead.
+#
+# The consequence to remember: the anchor set changes the SHAPE of the network's output layers, so
+# weights trained with one set will not load into a graph built with another. That is why every
+# registry entry stores its own anchor config and why this builder reads it from the entry rather
+# than assuming a default — pass the registry's arch, never hardcode.
 def build_model(arch):
     """Construct the Keypoint R-CNN graph described by an arch dict (random init;
     weights are loaded separately). weights=None avoids the 226 MB COCO download —

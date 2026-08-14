@@ -154,6 +154,34 @@ def api_model_card(model_id):
     return jsonify({"markdown": card.read_text() if card.exists() else ""})
 
 
+@app.get("/api/docs")
+def api_docs_list():
+    """List docs/*.md (filename + first heading) for the console Docs tab."""
+    docs = []
+    for p in sorted((REPO / "docs").glob("*.md")):
+        title = p.stem
+        try:
+            for line in p.read_text().splitlines():
+                if line.lstrip().startswith("#"):
+                    title = line.lstrip("# ").strip()
+                    break
+        except Exception:
+            pass
+        docs.append({"name": p.name, "title": title})
+    return jsonify({"docs": docs})
+
+
+@app.get("/api/docs/<path:name>")
+def api_doc(name):
+    """Raw markdown of one docs/ file (docs-folder-scoped, .md only, no traversal)."""
+    if not name.endswith(".md") or "/" in name or ".." in name:
+        return jsonify({"error": "bad doc name"}), 400
+    p = REPO / "docs" / name
+    if not p.exists():
+        return jsonify({"error": f"no doc {name!r}"}), 404
+    return jsonify({"markdown": p.read_text()})
+
+
 @app.post("/api/detect")
 def api_detect():
     body = request.get_json(force=True, silent=True) or {}
