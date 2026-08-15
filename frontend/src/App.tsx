@@ -31,6 +31,30 @@ type Dataset = {
   per_scene: Record<string, { vehicles: number; echoes: number }>
 }
 type Detection = { score: number; red_utm: [number, number]; keypoints_px: number[][] }
+type Pt = [number, number]
+// One outcome = one 64 px crop carrying BOTH what the model predicted and what it was
+// taught there. Coordinates are chip-local, so an SVG with viewBox "0 0 64 64" maps 1:1.
+type Chip = {
+  kind: 'tp' | 'fp' | 'fn'
+  chip: string              // data: URI, native 64 px
+  origin: Pt
+  pred: Pt[] | null         // predicted blue/red/green, null on a miss
+  gt: Pt[] | null           // labelled blue/red/green, null on a false alarm
+  other_pred: Pt[][]        // neighbours in frame, for context
+  other_gt: Pt[][]
+  score: number | null
+  err_px?: number           // TP only: mean keypoint distance
+  err_m?: number
+  red_err_px?: number
+  dist_to_label_m?: number | null   // FP only
+  vehicle?: number
+}
+type ChipSet = {
+  tp: Chip[]; fp: Chip[]; fn: Chip[]
+  totals: { tp: number; fp: number; fn: number }
+  truncated: { tp: boolean; fp: boolean; fn: boolean }
+  chip_px: number; match_px: number; gsd_m: number
+}
 type Split = 'train' | 'heldout' | 'unseen'
 type DetectResult = {
   scene: string
@@ -41,6 +65,7 @@ type DetectResult = {
   gt: { labelled: number; recall: number; near_label: number; elsewhere: number } | null
   montage_url: string
   preview_url: string
+  chips: ChipSet | null
   model_id?: string
   model_name?: string
   eval_split?: Split
@@ -819,6 +844,113 @@ function Metric({ label, value, sub }: { label: string; value: number | string; 
   )
 }
 
+
+// ---------------------------------------------------------------- outcome chips ---
+// Draws one crop with the predicted keypoints and the labelled ones on top of each other.
+// Prediction = filled dots joined by a solid line. Ground truth = hollow rings joined by a
+// dashed line. Same blue/red/green per band in both, so a mismatch reads as a colour that
+// has drifted off its ring rather than as two unrelated shapes.
+const KP_FILL = ['#5b8cff', '#ff4646', '#46dc5a']
+
+function ChipCard({ c, px, showPred, showGt }: { c: Chip; px: number; showPred: boolean; showGt: boolean }) {
+  const poly = (pts: Pt[]) => pts.map((p) => p.join(',')).join(' ')
+  return (
+    <div className={`chipcard k-${c.kind}`} title={`chip origin ${c.origin[0]},${c.origin[1]}`}>
+      <div className="chipcard-img" style={{ width: px, height: px }}>
+        <img src={c.chip} width={px} height={px} alt={c.kind} />
+        <svg viewBox="0 0 64 64" width={px} height={px}>
+          {showGt && c.other_gt.map((g, i) => (
+            <polyline key={`og${i}`} points={poly(g)} className="ln-gt dim" />
+          ))}
+          {showPred && c.other_pred.map((g, i) => (
+            <polyline key={`op${i}`} points={poly(g)} className="ln-pred dim" />
+          ))}
+          {showGt && c.gt && <polyline points={poly(c.gt)} className="ln-gt" />}
+          {showPred && c.pred && <polyline points={poly(c.pred)} className="ln-pred" />}
+          {showGt && c.gt && c.gt.map(([x, y], i) => (
+            <circle key={`g${i}`} cx={x} cy={y} r={3.2} className="kp-gt" style={{ stroke: KP_FILL[i] }} />
+          ))}
+          {showPred && c.pred && c.pred.map(([x, y], i) => (
+            <circle key={`p${i}`} cx={x} cy={y} r={1.9} className="kp-pred" style={{ fill: KP_FILL[i] }} />
+          ))}
+        </svg>
+      </div>
+      <div className="chipcard-foot">
+        {c.kind === 'tp' && <><b>{c.score!.toFixed(2)}</b><span>{c.err_m!.toFixed(0)} m off</span></>}
+        {c.kind === 'fp' && <><b>{c.score!.toFixed(2)}</b><span>{c.dist_to_label_m == null ? 'no label' : `${Math.round(c.dist_to_label_m)} m away`}</span></>}
+        {c.kind === 'fn' && <span className="missed">missed</span>}
+      </div>
+    </div>
+  )
+}
+
+const SECTIONS: { key: 'tp' | 'fp' | 'fn'; title: string; blurb: string }[] = [
+  { key: 'tp', title: 'True positives', blurb: 'A detection landed within 18 m of a labelled vehicle. Compare the filled dots against the rings to see how well the keypoints line up.' },
+  { key: 'fp', title: 'False positives', blurb: 'The model reported a vehicle where no label sits within 18 m. Some of these are real trucks that were never labelled, which is why precision here is a floor.' },
+  { key: 'fn', title: 'False negatives', blurb: 'A labelled vehicle no detection reached. Rings with nothing filled in: this is what the model was taught and did not find.' },
+]
+
+function ChipSections({ chips }: { chips: ChipSet }) {
+  const [px, setPx] = useState(112)
+  const [showPred, setShowPred] = useState(true)
+  const [showGt, setShowGt] = useState(true)
+  const [open, setOpen] = useState<Record<string, boolean>>({ tp: true, fp: true, fn: true })
+
+  return (
+    <div className="chipsections">
+      <div className="row-between chip-controls">
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button className={`role ${showPred ? 'role-train' : ''}`} onClick={() => setShowPred(!showPred)}>
+            <span className="swatch sw-pred" /> predicted
+          </button>
+          <button className={`role ${showGt ? 'role-train' : ''}`} onClick={() => setShowGt(!showGt)}>
+            <span className="swatch sw-gt" /> labelled
+          </button>
+          <span className="hint" style={{ marginLeft: 4 }}>blue → red → green in both</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span className="hint">size</span>
+          {[80, 112, 160].map((z) => (
+            <button key={z} className={`role ${px === z ? 'role-train' : ''}`} onClick={() => setPx(z)}>
+              {z === 80 ? 'S' : z === 112 ? 'M' : 'L'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {SECTIONS.map(({ key, title, blurb }) => {
+        const list = chips[key]
+        const total = chips.totals[key]
+        return (
+          <section key={key} className="chipsection">
+            <button className="chipsection-head" onClick={() => setOpen({ ...open, [key]: !open[key] })}>
+              <span className={`dot d-${key}`} />
+              <b>{title}</b>
+              <span className="count">{total}</span>
+              <span className="chev">{open[key] ? '−' : '+'}</span>
+            </button>
+            {open[key] && (
+              <>
+                <p className="hint" style={{ margin: '2px 0 8px' }}>{blurb}</p>
+                {list.length === 0
+                  ? <p className="hint">None at this threshold.</p>
+                  : <div className="chipgrid">
+                      {list.map((c, i) => <ChipCard key={i} c={c} px={px} showPred={showPred} showGt={showGt} />)}
+                    </div>}
+                {chips.truncated[key] && (
+                  <p className="hint" style={{ marginTop: 6 }}>
+                    Showing the first {list.length} of {total}, ranked by confidence.
+                  </p>
+                )}
+              </>
+            )}
+          </section>
+        )
+      })}
+    </div>
+  )
+}
+
 function ResultPanel({ result, nonce }: { result: DetectResult; nonce: number }) {
   const scores = result.detections.map((d) => d.score)
   const lo = scores.length ? Math.min(...scores) : 0
@@ -836,7 +968,7 @@ function ResultPanel({ result, nonce }: { result: DetectResult; nonce: number })
 
   const split = result.eval_split
   const si = split ? SPLIT[split] : null
-  const [view, setView] = useState<'scene' | 'crops'>('scene')
+  const [view, setView] = useState<'scene' | 'crops' | 'compare'>('scene')
   const [zoom, setZoom] = useState(1)
 
   return (
@@ -879,9 +1011,17 @@ function ResultPanel({ result, nonce }: { result: DetectResult; nonce: number })
       )}
       {/* inspect the whole scene (all detections drawn) + per-detection crops */}
       <div className="row-between" style={{ marginTop: 12, marginBottom: 6, alignItems: 'center' }}>
-        <div className="segmented" style={{ maxWidth: 320 }}>
+        <div className="segmented" style={{ maxWidth: 460 }}>
           <button className={view === 'scene' ? 'active' : ''} onClick={() => setView('scene')}>Full scene</button>
           <button className={view === 'crops' ? 'active' : ''} onClick={() => setView('crops')}>Detection crops</button>
+          <button
+            className={view === 'compare' ? 'active' : ''}
+            disabled={!result.chips}
+            title={result.chips ? 'Predicted vs labelled keypoints, grouped by outcome' : 'This scene has no labels to compare against'}
+            onClick={() => setView('compare')}
+          >
+            Predicted vs labelled{result.chips ? '' : ' (unlabelled)'}
+          </button>
         </div>
         {view === 'scene' && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -895,6 +1035,8 @@ function ResultPanel({ result, nonce }: { result: DetectResult; nonce: number })
           </div>
         )}
       </div>
+      {view === 'compare' && result.chips && <ChipSections chips={result.chips} />}
+      {view !== 'compare' && (
       <div className="detect-view">
         <img
           src={`${(view === 'scene' ? result.preview_url : result.montage_url)}?v=${nonce}`}
@@ -904,8 +1046,11 @@ function ResultPanel({ result, nonce }: { result: DetectResult; nonce: number })
             : { width: '100%', display: 'block' }}
         />
       </div>
+      )}
       <p className="hint" style={{ marginTop: 4 }}>
-        {view === 'scene'
+        {view === 'compare'
+          ? `Every outcome as its own crop: filled dots are what the model predicted, rings are what you labelled. Matching uses the red keypoint within ${result.chips ? result.chips.match_px * 3 : 18} m.`
+          : view === 'scene'
           ? `The whole scene with every detection marked (blue → red → green). ${result.count} detection${result.count === 1 ? '' : 's'} — zoom + scroll to inspect them, or "open ↗" for full resolution.`
           : `Each detection cropped + zoomed with its confidence score${g ? ' (GT = matched a label, FP? = off-label)' : ''}.`}
       </p>

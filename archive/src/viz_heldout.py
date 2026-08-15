@@ -101,7 +101,7 @@ def main(held, train_scenes, epochs, stride, thresh):   # NB: training needs gra
     # scene rgb + GT red keypoints in pixel space
     with rasterio.open(ds.GEOTIFF_DIR / f"{held}.tif") as src:
         rgb = ds.build_rgb(src)
-        gt_reds = ds.load_gt_reds(held, src.transform)
+        gt_reds = ds.load_gt_reds(held, src.transform, src.crs)
 
     tp, fp, missed = classify(det_reds, gt_reds)
     n_gt = len(gt_reds)

@@ -192,7 +192,10 @@ def api_detect():
         return jsonify({"error": "missing 'scene'"}), 400
     try:
         entry, model = mr.resolve(mr.load(), body.get("model_id"))
-        result = ds.detect(model, scene, stride=stride, thresh=thresh)
+        # chips=True adds the per-outcome comparison crops (predicted vs labelled keypoints).
+        # Only meaningful on a labelled scene; detect() returns None for chips otherwise.
+        result = ds.detect(model, scene, stride=stride, thresh=thresh,
+                           chips=bool(body.get("chips", True)))
     except (FileNotFoundError, KeyError) as e:
         return jsonify({"error": str(e)}), 404
     result["model_id"] = entry["id"]

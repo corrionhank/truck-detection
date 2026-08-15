@@ -216,3 +216,38 @@ input[type=range] { accent-color: var(--accent); }
 .docs-item:hover { background: var(--hover); color: var(--text-2); }
 .docs-item.active { background: var(--hover); color: var(--text); font-weight: 600; }
 .docs-body { flex: 1 1 auto; min-width: 0; max-height: calc(100vh - 170px); overflow: auto; }
+
+/* --- predicted vs labelled comparison chips (Inference tab) --- */
+.chipsections { display: flex; flex-direction: column; gap: 14px; }
+.chip-controls { align-items: center; flex-wrap: wrap; gap: 8px; }
+.swatch { display: inline-block; width: 9px; height: 9px; border-radius: 999px; margin-right: 5px; vertical-align: -1px; }
+.sw-pred { background: var(--text); }
+.sw-gt { background: transparent; border: 1.5px solid var(--text); }
+
+.chipsection { border: 1px solid var(--border); border-radius: var(--r-card); padding: 12px 14px 14px; background: var(--surface); }
+.chipsection-head { display: flex; align-items: center; gap: 8px; width: 100%; background: none; border: none; padding: 0 0 2px; color: var(--text); font-size: 14px; cursor: pointer; }
+.chipsection-head .count { font-family: var(--font-mono); font-size: 12px; color: var(--text-3); }
+.chipsection-head .chev { margin-left: auto; color: var(--text-3); font-size: 15px; }
+.dot { width: 9px; height: 9px; border-radius: 999px; flex: none; }
+.d-tp { background: var(--success); }
+.d-fp { background: var(--danger); }
+.d-fn { background: var(--text-3); }
+
+.chipgrid { display: flex; flex-wrap: wrap; gap: 10px; max-height: 560px; overflow-y: auto; padding: 2px; }
+.chipcard { display: flex; flex-direction: column; gap: 3px; border: 1px solid var(--border); border-radius: var(--r-ctl); padding: 4px; background: var(--code-bg); }
+.chipcard.k-tp { border-color: rgba(47,169,104,.45); }
+.chipcard.k-fp { border-color: rgba(209,69,43,.45); }
+.chipcard.k-fn { border-color: var(--border); }
+.chipcard-img { position: relative; line-height: 0; }
+.chipcard-img img { image-rendering: pixelated; border-radius: 2px; display: block; }
+.chipcard-img svg { position: absolute; inset: 0; overflow: visible; }
+.chipcard-foot { display: flex; justify-content: space-between; gap: 6px; font-family: var(--font-mono); font-size: 10.5px; color: var(--text-3); padding: 0 2px; }
+.chipcard-foot b { color: var(--text-2); font-weight: 600; }
+.chipcard-foot .missed { color: var(--text-3); font-style: italic; }
+
+/* prediction: filled dot + solid line. ground truth: hollow ring + dashed line. */
+.kp-pred { stroke: rgba(0,0,0,.55); stroke-width: .6; }
+.kp-gt { fill: none; stroke-width: 1.3; }
+.ln-pred { fill: none; stroke: rgba(255,255,255,.9); stroke-width: .8; }
+.ln-gt { fill: none; stroke: rgba(255,255,255,.75); stroke-width: .8; stroke-dasharray: 2 1.6; }
+.ln-pred.dim, .ln-gt.dim { stroke: rgba(255,255,255,.3); }
