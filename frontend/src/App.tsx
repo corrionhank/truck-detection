@@ -868,10 +868,10 @@ function ChipCard({ c, px, showPred, showGt }: { c: Chip; px: number; showPred: 
           {showGt && c.gt && <polyline points={poly(c.gt)} className="ln-gt" />}
           {showPred && c.pred && <polyline points={poly(c.pred)} className="ln-pred" />}
           {showGt && c.gt && c.gt.map(([x, y], i) => (
-            <circle key={`g${i}`} cx={x} cy={y} r={3.2} className="kp-gt" style={{ stroke: KP_FILL[i] }} />
+            <circle key={`g${i}`} cx={x} cy={y} r={2} className="kp-gt" style={{ stroke: KP_FILL[i] }} />
           ))}
           {showPred && c.pred && c.pred.map(([x, y], i) => (
-            <circle key={`p${i}`} cx={x} cy={y} r={1.9} className="kp-pred" style={{ fill: KP_FILL[i] }} />
+            <circle key={`p${i}`} cx={x} cy={y} r={1.3} className="kp-pred" style={{ fill: KP_FILL[i] }} />
           ))}
         </svg>
       </div>
