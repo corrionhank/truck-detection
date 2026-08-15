@@ -33,7 +33,9 @@ type Dataset = {
 type Detection = { score: number; red_utm: [number, number]; keypoints_px: number[][] }
 type Pt = [number, number]
 // One outcome = one 64 px crop carrying BOTH what the model predicted and what it was
-// taught there. Coordinates are chip-local, so an SVG with viewBox "0 0 64 64" maps 1:1.
+// taught there. Coordinates are chip-local, so the SVG viewBox must be the CHIP size, which
+// is now variable (the window is an inference parameter). Hardcoding 64 put every marker in
+// the top-left quadrant whenever the window was smaller.
 type Chip = {
   kind: 'tp' | 'fp' | 'fn'
   chip: string              // data: URI, native 64 px
@@ -875,26 +877,32 @@ function Metric({ label, value, sub }: { label: string; value: number | string; 
 // has drifted off its ring rather than as two unrelated shapes.
 const KP_FILL = ['#5b8cff', '#ff4646', '#46dc5a']
 
-function ChipCard({ c, px, showPred, showGt }: { c: Chip; px: number; showPred: boolean; showGt: boolean }) {
+function ChipCard({ c, px, chip, showPred, showGt }:
+                  { c: Chip; px: number; chip: number; showPred: boolean; showGt: boolean }) {
   const poly = (pts: Pt[]) => pts.map((p) => p.join(',')).join(' ')
+  // radii are in chip units, so scale them to keep a constant on-screen size at any window
+  const k = chip / 64
+  const rGt = 2 * k, rPred = 1.3 * k
   return (
     <div className={`chipcard k-${c.kind}`} title={`chip origin ${c.origin[0]},${c.origin[1]}`}>
       <div className="chipcard-img" style={{ width: px, height: px }}>
         <img src={c.chip} width={px} height={px} alt={c.kind} />
-        <svg viewBox="0 0 64 64" width={px} height={px}>
+        <svg viewBox={`0 0 ${chip} ${chip}`} width={px} height={px} vectorEffect="non-scaling-stroke">
           {showGt && c.other_gt.map((g, i) => (
-            <polyline key={`og${i}`} points={poly(g)} className="ln-gt dim" />
+            <polyline key={`og${i}`} points={poly(g)} className="ln-gt dim" vectorEffect="non-scaling-stroke" />
           ))}
           {showPred && c.other_pred.map((g, i) => (
-            <polyline key={`op${i}`} points={poly(g)} className="ln-pred dim" />
+            <polyline key={`op${i}`} points={poly(g)} className="ln-pred dim" vectorEffect="non-scaling-stroke" />
           ))}
-          {showGt && c.gt && <polyline points={poly(c.gt)} className="ln-gt" />}
-          {showPred && c.pred && <polyline points={poly(c.pred)} className="ln-pred" />}
+          {showGt && c.gt && <polyline points={poly(c.gt)} className="ln-gt" vectorEffect="non-scaling-stroke" />}
+          {showPred && c.pred && <polyline points={poly(c.pred)} className="ln-pred" vectorEffect="non-scaling-stroke" />}
           {showGt && c.gt && c.gt.map(([x, y], i) => (
-            <circle key={`g${i}`} cx={x} cy={y} r={2} className="kp-gt" style={{ stroke: KP_FILL[i] }} />
+            <circle key={`g${i}`} cx={x} cy={y} r={rGt} className="kp-gt"
+                    vectorEffect="non-scaling-stroke" style={{ stroke: KP_FILL[i] }} />
           ))}
           {showPred && c.pred && c.pred.map(([x, y], i) => (
-            <circle key={`p${i}`} cx={x} cy={y} r={1.3} className="kp-pred" style={{ fill: KP_FILL[i] }} />
+            <circle key={`p${i}`} cx={x} cy={y} r={rPred} className="kp-pred"
+                    vectorEffect="non-scaling-stroke" style={{ fill: KP_FILL[i] }} />
           ))}
         </svg>
       </div>
@@ -958,7 +966,8 @@ function ChipSections({ chips }: { chips: ChipSet }) {
                 {list.length === 0
                   ? <p className="hint">None at this threshold.</p>
                   : <div className="chipgrid">
-                      {list.map((c, i) => <ChipCard key={i} c={c} px={px} showPred={showPred} showGt={showGt} />)}
+                      {list.map((c, i) => <ChipCard key={i} c={c} px={px} chip={chips.chip_px}
+                                           showPred={showPred} showGt={showGt} />)}
                     </div>}
                 {chips.truncated[key] && (
                   <p className="hint" style={{ marginTop: 6 }}>
