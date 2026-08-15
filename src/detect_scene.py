@@ -169,8 +169,13 @@ def build_chip_records(rgb, kept, gt_vehicles, limit=400, chip=CHIP):
         return (max(0, min(int(round(cx)) - chip // 2, W - chip)),
                 max(0, min(int(round(cy)) - chip // 2, H - chip)))
 
-    def inside(pts, x0, y0):
-        return all(x0 <= px < x0 + chip and y0 <= py < y0 + chip for px, py in pts)
+    def overlaps(pts, x0, y0):
+        """ANY keypoint in frame, not all three. Requiring all three made a vehicle straddling
+        the window edge disappear completely, which is exactly the case worth seeing: it is
+        how you tell 'the model missed it' apart from 'the label is half out of shot'. The
+        console clips the overlay to the chip, so the off-frame points simply run off the
+        edge and the connecting line shows which way they went."""
+        return any(x0 <= px < x0 + chip and y0 <= py < y0 + chip for px, py in pts)
 
     def pack(kind, cx, cy, subject_pred, subject_gt, extra):
         x0, y0 = window(cx, cy)
@@ -179,15 +184,18 @@ def build_chip_records(rgb, kept, gt_vehicles, limit=400, chip=CHIP):
                         if subject_pred is not None else None),
                "gt": ([[round(float(a - x0), 2), round(float(b - y0), 2)] for a, b in subject_gt]
                       if subject_gt is not None else None)}
-        # neighbours that also land in frame, so a busy chip reads correctly
+        # Every other vehicle and every other detection that reaches into this window, so a
+        # chip always answers "what is really here" as well as "what was reported here". On a
+        # false positive this is what shows whether a real label sits just outside the match
+        # radius or whether there is genuinely nothing there.
         rec["other_pred"] = [[[round(float(a - x0), 2), round(float(b - y0), 2)] for a, b in kp]
                              for _, (s, kp) in dets
                              if (subject_pred is None or not np.array_equal(kp, subject_pred))
-                             and inside(kp, x0, y0)]
+                             and overlaps(kp, x0, y0)]
         rec["other_gt"] = [[[round(float(a - x0), 2), round(float(b - y0), 2)] for a, b in g]
                            for g in gts
                            if (subject_gt is None or not np.array_equal(g, subject_gt))
-                           and inside(g, x0, y0)]
+                           and overlaps(g, x0, y0)]
         rec.update(extra)
         return rec
 

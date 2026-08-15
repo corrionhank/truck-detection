@@ -240,7 +240,9 @@ input[type=range] { accent-color: var(--accent); }
 .chipcard.k-fn { border-color: var(--border); }
 .chipcard-img { position: relative; line-height: 0; }
 .chipcard-img img { image-rendering: pixelated; border-radius: 2px; display: block; }
-.chipcard-img svg { position: absolute; inset: 0; overflow: visible; }
+/* clip to the chip: a label straddling the edge should run off it, not bleed
+   over the neighbouring card in the grid */
+.chipcard-img svg { position: absolute; inset: 0; overflow: hidden; }
 .chipcard-foot { display: flex; justify-content: space-between; gap: 6px; font-family: var(--font-mono); font-size: 10.5px; color: var(--text-3); padding: 0 2px; }
 .chipcard-foot b { color: var(--text-2); font-weight: 600; }
 .chipcard-foot .missed { color: var(--text-3); font-style: italic; }
@@ -251,3 +253,5 @@ input[type=range] { accent-color: var(--accent); }
 .ln-pred { fill: none; stroke: rgba(255,255,255,.65); stroke-width: .45; }
 .ln-gt { fill: none; stroke: rgba(255,255,255,.5); stroke-width: .45; stroke-dasharray: 1.6 1.4; }
 .ln-pred.dim, .ln-gt.dim { stroke: rgba(255,255,255,.22); }
+.kp-gt.dim, .kp-pred.dim { opacity: .5; }
+.chipcard-nb { display: flex; gap: 6px; font-family: var(--font-mono); font-size: 9.5px; color: var(--text-3); padding: 0 2px 1px; opacity: .8; }

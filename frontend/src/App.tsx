@@ -888,11 +888,26 @@ function ChipCard({ c, px, chip, showPred, showGt }:
       <div className="chipcard-img" style={{ width: px, height: px }}>
         <img src={c.chip} width={px} height={px} alt={c.kind} />
         <svg viewBox={`0 0 ${chip} ${chip}`} width={px} height={px} vectorEffect="non-scaling-stroke">
+          {/* neighbours first, dimmed, so the subject of the chip stays the primary read.
+              They carry markers as well as a line: without markers you cannot tell where a
+              second vehicle actually is, only that one is somewhere in frame. */}
           {showGt && c.other_gt.map((g, i) => (
-            <polyline key={`og${i}`} points={poly(g)} className="ln-gt dim" vectorEffect="non-scaling-stroke" />
+            <g key={`og${i}`} className="nb">
+              <polyline points={poly(g)} className="ln-gt dim" vectorEffect="non-scaling-stroke" />
+              {g.map(([x, y], j) => (
+                <circle key={j} cx={x} cy={y} r={rGt * 0.8} className="kp-gt dim"
+                        vectorEffect="non-scaling-stroke" style={{ stroke: KP_FILL[j] }} />
+              ))}
+            </g>
           ))}
           {showPred && c.other_pred.map((g, i) => (
-            <polyline key={`op${i}`} points={poly(g)} className="ln-pred dim" vectorEffect="non-scaling-stroke" />
+            <g key={`op${i}`} className="nb">
+              <polyline points={poly(g)} className="ln-pred dim" vectorEffect="non-scaling-stroke" />
+              {g.map(([x, y], j) => (
+                <circle key={j} cx={x} cy={y} r={rPred * 0.8} className="kp-pred dim"
+                        vectorEffect="non-scaling-stroke" style={{ fill: KP_FILL[j] }} />
+              ))}
+            </g>
           ))}
           {showGt && c.gt && <polyline points={poly(c.gt)} className="ln-gt" vectorEffect="non-scaling-stroke" />}
           {showPred && c.pred && <polyline points={poly(c.pred)} className="ln-pred" vectorEffect="non-scaling-stroke" />}
@@ -911,6 +926,12 @@ function ChipCard({ c, px, chip, showPred, showGt }:
         {c.kind === 'fp' && <><b>{c.score!.toFixed(2)}</b><span>{c.dist_to_label_m == null ? 'no label' : `${Math.round(c.dist_to_label_m)} m away`}</span></>}
         {c.kind === 'fn' && <span className="missed">missed</span>}
       </div>
+      {(c.other_gt.length > 0 || c.other_pred.length > 0) && (
+        <div className="chipcard-nb" title="other vehicles reaching into this window">
+          {c.other_gt.length > 0 && <span>+{c.other_gt.length} labelled</span>}
+          {c.other_pred.length > 0 && <span>+{c.other_pred.length} detected</span>}
+        </div>
+      )}
     </div>
   )
 }
