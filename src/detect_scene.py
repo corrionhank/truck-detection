@@ -31,7 +31,9 @@ from export_coco import RED, GREEN, BLUE, stretch_params, apply_stretch
 
 WEIGHTS = REPO / "weights" / "keypoint_rcnn_echo.pt"  # default for the standalone CLI
 GEOTIFF_DIR = REPO / "data" / "active" / "imagery"
-CHIP = 64
+CHIP = 64          # default window; the models were trained on 64 px chips
+UPSCALE = 3        # chips are resized to CHIP*UPSCALE before the backbone (192 for 64 px)
+DEDUP_PX = 32.0    # duplicate-suppression radius, 96 m. Independent of the window size.
 KP_COLORS = [(80, 140, 255), (255, 70, 70), (70, 220, 90)]  # blue, red, green
 
 
@@ -73,21 +75,21 @@ def load_gt_reds(scene, transform, crs):
     return [list(v[1]) for v in load_gt_vehicles(scene, transform, crs)]
 
 
-def make_det_montage(scene, rgb, kept, gt_reds):
+def make_det_montage(scene, rgb, kept, gt_reds, chip=CHIP):
     """Zoomed crop of every detection with its predicted keypoints, for eyeballing."""
     import math
     if not kept:
         return
     SCALE, GAP, cols = 5, 6, 6
     rows = math.ceil(len(kept) / cols)
-    cw = CHIP * SCALE
+    cw = chip * SCALE
     tw, th = cw + GAP, cw + GAP + 16
     m = Image.new("RGB", (cols * tw + GAP, rows * th + GAP), (18, 18, 22))
     for k, (s, kp) in enumerate(kept):
         cx, cy = int(round(kp[1][0])), int(round(kp[1][1]))
-        x0 = max(0, min(cx - CHIP // 2, rgb.shape[1] - CHIP))
-        y0 = max(0, min(cy - CHIP // 2, rgb.shape[0] - CHIP))
-        crop = Image.fromarray(rgb[y0:y0 + CHIP, x0:x0 + CHIP]).resize((cw, cw), Image.NEAREST)
+        x0 = max(0, min(cx - chip // 2, rgb.shape[1] - chip))
+        y0 = max(0, min(cy - chip // 2, rgb.shape[0] - chip))
+        crop = Image.fromarray(rgb[y0:y0 + chip, x0:x0 + chip]).resize((cw, cw), Image.NEAREST)
         d = ImageDraw.Draw(crop)
         pts = [((kx - x0) * SCALE, (ky - y0) * SCALE) for kx, ky in kp]
         for j in range(2):
@@ -119,12 +121,12 @@ def make_det_montage(scene, rgb, kept, gt_reds):
 MATCH_PX = 6.0          # 18 m at 3 m/px
 
 
-def _chip_png(rgb, x0, y0):
-    """Raw CHIP-sized crop as a base64 PNG. Sent at native 64 px; the browser upscales it
-    with nearest-neighbour, which keeps it crisp and keeps the payload small."""
+def _chip_png(rgb, x0, y0, chip=CHIP):
+    """Raw crop as a base64 PNG, sent at native resolution; the browser upscales it with
+    nearest-neighbour, which keeps it crisp and keeps the payload small."""
     import base64, io
     buf = io.BytesIO()
-    Image.fromarray(rgb[y0:y0 + CHIP, x0:x0 + CHIP]).save(buf, format="PNG")
+    Image.fromarray(rgb[y0:y0 + chip, x0:x0 + chip]).save(buf, format="PNG")
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
@@ -150,7 +152,7 @@ def greedy_assign(kept, gt_reds):
     return verdict, claimed_by
 
 
-def build_chip_records(rgb, kept, gt_vehicles, limit=400):
+def build_chip_records(rgb, kept, gt_vehicles, limit=400, chip=CHIP):
     """{'tp': [...], 'fp': [...], 'fn': [...]} — one record per outcome.
 
     Each record carries the chip image plus every predicted and every labelled vehicle
@@ -164,15 +166,15 @@ def build_chip_records(rgb, kept, gt_vehicles, limit=400):
     verdict, claimed_by = greedy_assign(kept, gt_reds)
 
     def window(cx, cy):
-        return (max(0, min(int(round(cx)) - CHIP // 2, W - CHIP)),
-                max(0, min(int(round(cy)) - CHIP // 2, H - CHIP)))
+        return (max(0, min(int(round(cx)) - chip // 2, W - chip)),
+                max(0, min(int(round(cy)) - chip // 2, H - chip)))
 
     def inside(pts, x0, y0):
-        return all(x0 <= px < x0 + CHIP and y0 <= py < y0 + CHIP for px, py in pts)
+        return all(x0 <= px < x0 + chip and y0 <= py < y0 + chip for px, py in pts)
 
     def pack(kind, cx, cy, subject_pred, subject_gt, extra):
         x0, y0 = window(cx, cy)
-        rec = {"kind": kind, "chip": _chip_png(rgb, x0, y0), "origin": [x0, y0],
+        rec = {"kind": kind, "chip": _chip_png(rgb, x0, y0, chip), "origin": [x0, y0],
                "pred": ([[round(float(a - x0), 2), round(float(b - y0), 2)] for a, b in subject_pred]
                         if subject_pred is not None else None),
                "gt": ([[round(float(a - x0), 2), round(float(b - y0), 2)] for a, b in subject_gt]
@@ -214,7 +216,7 @@ def build_chip_records(rgb, kept, gt_vehicles, limit=400):
     return {"tp": tp[:limit], "fp": fp[:limit], "fn": fn[:limit],
             "totals": {"tp": len(tp), "fp": len(fp), "fn": len(fn)},
             "truncated": {"tp": len(tp) > limit, "fp": len(fp) > limit, "fn": len(fn) > limit},
-            "chip_px": CHIP, "match_px": MATCH_PX, "gsd_m": 3.0}
+            "chip_px": chip, "match_px": MATCH_PX, "gsd_m": 3.0}
 
 
 def load_model(weights=None, anchors="default"):
@@ -231,13 +233,28 @@ def load_model(weights=None, anchors="default"):
 
 
 @torch.no_grad()
-def detect(model, scene, stride=40, thresh=0.3, min_valid=0.15, batch=12, chips=False):
+def detect(model, scene, stride=None, thresh=0.3, min_valid=0.15, batch=12, chips=False,
+           chip=CHIP, dedup_px=DEDUP_PX):
     """Run sliding-window detection on one scene. Returns a structured dict and
     writes the montage/preview/JSON to outputs/. Pure Python types so a web
     backend can JSON-serialise the result directly."""
     tif = GEOTIFF_DIR / f"{scene}.tif"
     if not tif.exists():
         raise FileNotFoundError(f"no GeoTIFF for {scene!r}")
+
+    # Window size is an INFERENCE parameter, but the weights were trained at CHIP px upscaled
+    # UPSCALE times. Keep that ratio so a truck arrives at the size the model learned; feeding
+    # a 32 px window at the 64 px setting would present every echo at double scale and the
+    # anchors would not match. Smaller windows therefore trade context, not scale.
+    chip = int(chip)
+    model.transform.min_size = (chip * UPSCALE,)
+    model.transform.max_size = int(chip * UPSCALE * (320 / 192))
+    # Stride defaults to the same 0.625 ratio the 64/40 default uses. A stride at or above the
+    # window leaves uncovered gaps between windows, so it is clamped.
+    stride = int(stride) if stride else max(1, round(chip * 0.625))
+    if stride >= chip:
+        print(f"  stride {stride} >= window {chip}: gaps between windows -> clamping to {chip - 1}")
+        stride = chip - 1
 
     with rasterio.open(tif) as src:
         rgb = build_rgb(src)
@@ -247,17 +264,17 @@ def detect(model, scene, stride=40, thresh=0.3, min_valid=0.15, batch=12, chips=
 
     # window origins on a stride grid, kept only where enough road is present
     origins = []
-    for y0 in range(0, H - CHIP + 1, stride):
-        for x0 in range(0, W - CHIP + 1, stride):
-            if valid[y0:y0 + CHIP, x0:x0 + CHIP].mean() >= min_valid:
+    for y0 in range(0, H - chip + 1, stride):
+        for x0 in range(0, W - chip + 1, stride):
+            if valid[y0:y0 + chip, x0:x0 + chip].mean() >= min_valid:
                 origins.append((x0, y0))
-    print(f"scene {scene}: {W}x{H}px, {len(origins)} road windows (stride {stride})")
+    print(f"scene {scene}: {W}x{H}px, {len(origins)} road windows (window {chip}px, stride {stride}, resized to {chip*UPSCALE}px)")
 
     # run windows through the model in batches
     dets = []  # (score, [ (kx,ky) x3 ] in full-scene px)
     for i in range(0, len(origins), batch):
         chunk = origins[i:i + batch]
-        imgs = [torch.from_numpy(rgb[y:y + CHIP, x:x + CHIP].copy())
+        imgs = [torch.from_numpy(rgb[y:y + chip, x:x + chip].copy())
                 .permute(2, 0, 1).float().div(255) for x, y in chunk]
         outs = model(imgs)
         for (x0, y0), out in zip(chunk, outs):
@@ -269,12 +286,14 @@ def detect(model, scene, stride=40, thresh=0.3, min_valid=0.15, batch=12, chips=
             kp = out["keypoints"][0].numpy()[:, :2] + np.array([x0, y0])
             dets.append((s, kp))
 
-    # dedupe overlapping windows: greedy by score, suppress reds within CHIP/2 px
+    # dedupe overlapping windows: greedy by score, suppress reds within dedup_px.
+    # Deliberately NOT tied to the window size — otherwise changing the window would silently
+    # change the suppression radius too and the two effects could not be told apart.
     dets.sort(key=lambda d: -d[0])
     kept = []
     for s, kp in dets:
         red = kp[1]
-        if all(np.linalg.norm(red - k[1][1]) > CHIP / 2 for k in kept):
+        if all(np.linalg.norm(red - k[1][1]) > dedup_px for k in kept):
             kept.append((s, kp))
     print(f"detections > {thresh}: {len(dets)} raw -> {len(kept)} after dedupe")
 
@@ -304,10 +323,10 @@ def detect(model, scene, stride=40, thresh=0.3, min_valid=0.15, batch=12, chips=
               f"one detection per label); {len(kept)-tp}/{len(kept)} detections off-label")
 
     # ---- per-outcome comparison chips (predicted vs labelled keypoints) ----
-    chips = build_chip_records(rgb, kept, gt_vehicles) if (chips and gt_vehicles) else None
+    chips = build_chip_records(rgb, kept, gt_vehicles, chip=chip) if (chips and gt_vehicles) else None
 
     # ---- zoomed montage of each detection's crop, keypoints drawn ----
-    make_det_montage(scene, rgb, kept, gt_reds)
+    make_det_montage(scene, rgb, kept, gt_reds, chip=chip)
 
     # ---- preview: crop to the valid bbox, upscale, draw detections ----
     ys, xs = np.where(valid)
@@ -333,6 +352,10 @@ def detect(model, scene, stride=40, thresh=0.3, min_valid=0.15, batch=12, chips=
         "scene": scene,
         "stride": stride,
         "thresh": thresh,
+        "chip_px": chip,
+        "chip_m": round(chip * 3.0),
+        "dedup_px": dedup_px,
+        "resized_to": chip * UPSCALE,
         "count": len(kept),
         "detections": recs,
         "gt": gt_stats,
@@ -342,18 +365,24 @@ def detect(model, scene, stride=40, thresh=0.3, min_valid=0.15, batch=12, chips=
     }
 
 
-def main(scene, stride, thresh, min_valid, batch, weights, anchors):
+def main(scene, stride, thresh, min_valid, batch, weights, anchors, chip, dedup_px):
     model = load_model(weights, anchors)
     print(f"weights: {(Path(weights) if weights else WEIGHTS)}  (anchors={anchors})")
     result = detect(model, scene, stride=stride, thresh=thresh,
-                    min_valid=min_valid, batch=batch)
+                    min_valid=min_valid, batch=batch, chip=chip, dedup_px=dedup_px)
     print(f"-> {result['count']} detections; montage outputs/{result['montage']}")
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("scene")
-    ap.add_argument("--stride", type=int, default=40)
+    ap.add_argument("--stride", type=int, default=None,
+                    help="window step (default: 0.625 * chip, i.e. 40 for a 64 px chip)")
+    ap.add_argument("--chip", type=int, default=CHIP,
+                    help="sliding-window size in px; resized to chip*3 so the echo keeps the "
+                         "scale the weights were trained at (64 px = 192 m across)")
+    ap.add_argument("--dedup-px", dest="dedup_px", type=float, default=DEDUP_PX,
+                    help="duplicate-suppression radius in px (32 = 96 m). Not tied to --chip")
     ap.add_argument("--thresh", type=float, default=0.3)
     ap.add_argument("--min_valid", type=float, default=0.15)
     ap.add_argument("--batch", type=int, default=12)

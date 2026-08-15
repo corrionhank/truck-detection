@@ -65,6 +65,10 @@ type DetectResult = {
   gt: { labelled: number; recall: number; near_label: number; elsewhere: number } | null
   montage_url: string
   preview_url: string
+  chip_px?: number
+  chip_m?: number
+  dedup_px?: number
+  resized_to?: number
   chips: ChipSet | null
   model_id?: string
   model_name?: string
@@ -738,6 +742,7 @@ function InferenceView({ scenes, registry, refreshScenes }: { scenes: Scene[]; r
   const [scene, setScene] = useState('')
   const [modelId, setModelId] = useState('')
   const [thresh, setThresh] = useState(0.5)
+  const [chip, setChip] = useState(64)
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<DetectResult | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -756,7 +761,7 @@ function InferenceView({ scenes, registry, refreshScenes }: { scenes: Scene[]; r
       const r = await fetch('/api/detect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scene, thresh, model_id: modelId }),
+        body: JSON.stringify({ scene, thresh, chip, model_id: modelId }),
       })
       const data = await r.json()
       if (!r.ok) throw new Error(data.error || r.statusText)
@@ -817,6 +822,24 @@ function InferenceView({ scenes, registry, refreshScenes }: { scenes: Scene[]; r
         onChange={(e) => setThresh(parseFloat(e.target.value))} disabled={busy}
         style={{ width: '100%' }}
       />
+
+      <label className="field-label" style={{ marginTop: 10 }}>
+        Window size: {chip} px · {chip * 3} m across
+      </label>
+      <div className="segmented" style={{ maxWidth: 320 }}>
+        {[32, 48, 64].map((c) => (
+          <button key={c} className={chip === c ? 'active' : ''} disabled={busy} onClick={() => setChip(c)}>
+            {c} px{c === 64 ? ' (trained)' : ''}
+          </button>
+        ))}
+      </div>
+      <p className="hint" style={{ marginTop: 4 }}>
+        The sliding window the detector moves across the scene. Every window is resized to{' '}
+        {chip * 3}&nbsp;px before the model sees it, so the echo keeps the scale the weights were
+        trained at. A smaller window trades surrounding context, not resolution. Stride follows at{' '}
+        {Math.round(chip * 0.625)}&nbsp;px.{' '}
+        {chip !== 64 && <b>Weights were trained at 64&nbsp;px; treat this as an experiment.</b>}
+      </p>
 
       <button className="primary wide" onClick={run} style={{ marginTop: 12 }} disabled={busy || !scene}>
         {busy ? <Loader2 size={14} className="spin" /> : <Play size={14} />}
@@ -990,7 +1013,7 @@ function ResultPanel({ result, nonce }: { result: DetectResult; nonce: number })
         </div>
       )}
       <div className="metric-row">
-        <Metric label="Detected" value={result.count} sub={`stride ${result.stride} · thr ${result.thresh}`} />
+        <Metric label="Detected" value={result.count} sub={`${result.chip_px ?? 64}px win · stride ${result.stride} · thr ${result.thresh}`} />
         {g && <Metric label="Recall" value={pct(recall!)} sub={`${g.recall}/${g.labelled} found`} />}
         {g && <Metric label="Precision*" value={pct(precision!)} sub={`${g.near_label}/${result.count} on-label`} />}
         {g && f1 != null && <Metric label="F1*" value={pct(f1)} sub="precision · recall" />}

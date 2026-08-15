@@ -186,8 +186,13 @@ def api_doc(name):
 def api_detect():
     body = request.get_json(force=True, silent=True) or {}
     scene = body.get("scene")
-    stride = int(body.get("stride", 40))
     thresh = float(body.get("thresh", 0.5))
+    # Window size is an inference parameter like the threshold: the model is resized to
+    # chip*3 either way, so the echo keeps the scale the weights were trained at and only
+    # the amount of surrounding context changes. Stride follows the window unless given.
+    chip = int(body.get("chip", ds.CHIP))
+    stride = int(body["stride"]) if body.get("stride") else None
+    dedup_px = float(body.get("dedup_px", ds.DEDUP_PX))
     if not scene:
         return jsonify({"error": "missing 'scene'"}), 400
     try:
@@ -195,7 +200,8 @@ def api_detect():
         # chips=True adds the per-outcome comparison crops (predicted vs labelled keypoints).
         # Only meaningful on a labelled scene; detect() returns None for chips otherwise.
         result = ds.detect(model, scene, stride=stride, thresh=thresh,
-                           chips=bool(body.get("chips", True)))
+                           chips=bool(body.get("chips", True)),
+                           chip=chip, dedup_px=dedup_px)
     except (FileNotFoundError, KeyError) as e:
         return jsonify({"error": str(e)}), 404
     result["model_id"] = entry["id"]
@@ -326,4 +332,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8787)
     args = ap.parse_args()
-    app.run(host="127.0.0.1", port=args.port, debug=False)
+    # threaded: a detection run can take minutes (a 32 px window quadruples the window
+    # count), and single-threaded Flask blocks every other request until it finishes —
+    # which made the console read "backend not reachable" mid-run.
+    app.run(host="127.0.0.1", port=args.port, debug=False, threaded=True)
