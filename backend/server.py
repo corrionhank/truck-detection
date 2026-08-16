@@ -190,13 +190,15 @@ def api_detect():
     # Window size is an inference parameter like the threshold: the model is resized to
     # chip*3 either way, so the echo keeps the scale the weights were trained at and only
     # the amount of surrounding context changes. Stride follows the window unless given.
-    chip = int(body.get("chip", ds.CHIP))
     stride = int(body["stride"]) if body.get("stride") else None
     dedup_px = float(body.get("dedup_px", ds.DEDUP_PX))
     if not scene:
         return jsonify({"error": "missing 'scene'"}), 400
     try:
         entry, model = mr.resolve(mr.load(), body.get("model_id"))
+        # Default the window to the size this model was trained at. Models trained before
+        # chip_px was recorded fall back to 64, which is what they used.
+        chip = int(body.get("chip") or entry.get("arch", {}).get("chip_px") or ds.CHIP)
         # chips=True adds the per-outcome comparison crops (predicted vs labelled keypoints).
         # Only meaningful on a labelled scene; detect() returns None for chips otherwise.
         result = ds.detect(model, scene, stride=stride, thresh=thresh,

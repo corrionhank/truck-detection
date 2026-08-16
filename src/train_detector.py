@@ -51,6 +51,10 @@ import detect_scene as ds
 
 REPO = Path(__file__).resolve().parent.parent
 COCO = REPO / "data" / "active" / "coco"
+# Defaults only. main() rebinds these from the export's own info.chip_px, so the trainer
+# always uses whatever size export_coco.py actually cut. Keeping it a flag instead would
+# let the two disagree silently, which would train on mis-scaled crops and look like a
+# model problem rather than a config one.
 CHIP, HALF = 64, 32
 
 
@@ -72,12 +76,13 @@ CHIP, HALF = 64, 32
 #     we labelled only the centre one, every neighbour would be taught to the model as background —
 #     we would be actively training it to ignore real trucks.
 def load_coco():
-    """{scene: [(chip uint8 SxSx3, kps float32[N,3,2] center-vehicle-first, in export px), ...]}.
+    """({scene: [(chip uint8 SxSx3, kps float32[N,3,2] center-vehicle-first, in export px), ...]}, info).
 
     S is the exported chip size (CHIP + 2*margin); the model crops CHIP from it at train time.
     Each chip carries the center vehicle plus any neighbours whose echo fell inside the window
     (multi-vehicle targets); with legacy single-vehicle chips N == 1 and S == CHIP."""
     d = json.loads((COCO / "annotations.json").read_text())
+    info = d.get("info", {})
     per_img = {}
     for a in d["annotations"]:
         per_img.setdefault(a["image_id"], []).append(a)
@@ -90,7 +95,7 @@ def load_coco():
         chip = np.asarray(Image.open(COCO / "images" / im["file_name"]).convert("RGB"))
         kps = np.stack([np.array(a["keypoints"], np.float32).reshape(3, 3)[:, :2] for a in anns])
         by_scene.setdefault(im["scene"], []).append((chip, kps))
-    return by_scene
+    return by_scene, info
 
 
 # ------------------------------------------------- augmentation (Adamiak) ---
@@ -637,7 +642,23 @@ def footprint_split_check(train_scenes, held_scenes, decim=8):
 # mix during training and is then tested on it. The score comes out much higher and means nothing,
 # because deployment always means a scene the model has never seen.
 def main(a):
-    by_scene = load_coco()
+    global CHIP, HALF
+    by_scene, coco_info = load_coco()
+
+    # The export records the size it cut. Adopt it, so `export_coco.py --chip 32` followed by
+    # a training run needs no second flag and cannot be mismatched.
+    CHIP = int(coco_info.get("chip_px", CHIP)); HALF = CHIP // 2
+    export_px = int(coco_info.get("export_px", CHIP))
+    # Input resize defaults to 3x the chip, the ratio the 64 px chips were trained at (192).
+    # Holding the ratio keeps an echo the same size in model space at any chip, so the anchor
+    # set stays valid; overriding min_size instead trades context for resolution and needs an
+    # anchor sweep to go with it.
+    if a.min_size is None:
+        a.min_size = CHIP * 3
+    if a.max_size is None:
+        a.max_size = round(CHIP * 5)
+    print(f"chips: {CHIP}px model chip from a {export_px}px export "
+          f"(margin {(export_px - CHIP)//2}px) -> resized to {a.min_size}px", flush=True)
     held = [s.strip() for s in a.held.split(",") if s.strip()]
     bad = [s for s in held if s not in by_scene]
     if bad:
@@ -674,7 +695,7 @@ def main(a):
         #                                                     val overlaps train, used only for the LR signal
 
     arch = {
-        "backbone": "resnet50-fpn", "classes": 2, "keypoints": 3,
+        "backbone": "resnet50-fpn", "classes": 2, "keypoints": 3, "chip_px": CHIP,
         "anchor_sizes": [int(x) for x in a.anchor_sizes.split(",")],
         "aspect_ratios": [float(x) for x in a.aspect_ratios.split(",")],
         "min_size": a.min_size, "max_size": a.max_size,
@@ -730,7 +751,8 @@ def main(a):
         "created": a.date, "card": f"cards/{a.id}.md",
         "arch": {"backbone": "resnet50-fpn", "anchors": "custom",
                  "anchor_sizes": arch["anchor_sizes"], "aspect_ratios": arch["aspect_ratios"],
-                 "classes": 2, "keypoints": 3, "min_size": a.min_size, "max_size": a.max_size},
+                 "classes": 2, "keypoints": 3, "chip_px": CHIP,
+                 "min_size": a.min_size, "max_size": a.max_size},
         "train": {"vehicles": len(train_items), "scenes": train_scenes, "epochs": a.epochs,
                   "batch": a.batch, "lr": a.lr, "warmup_iters": a.warmup,
                   "best_val_epoch": best["epoch"],
@@ -774,8 +796,11 @@ if __name__ == "__main__":
                    help="comma-separated TRAIN scenes (default: every scene not held out)")
     p.add_argument("--anchor-sizes", dest="anchor_sizes", default="4,8,16,32,48")
     p.add_argument("--aspect-ratios", dest="aspect_ratios", default="0.25,0.5,0.75,1.0,1.25")
-    p.add_argument("--min-size", dest="min_size", type=int, default=192)
-    p.add_argument("--max-size", dest="max_size", type=int, default=320)
+    p.add_argument("--min-size", dest="min_size", type=int, default=None,
+                   help="input resize (default: 3 * chip, i.e. 192 for a 64 px chip). Raising it "
+                        "past that buys resolution on the echo but needs an anchor sweep")
+    p.add_argument("--max-size", dest="max_size", type=int, default=None,
+                   help="default: 5 * chip")
     p.add_argument("--device", choices=["auto", "gpu", "cuda", "mps", "cpu"], default="auto",
                    help="auto = CUDA if present, else MPS if it passes the divergence probe, else CPU")
     p.add_argument("--aug", choices=["none", "adamiak"], default="adamiak",

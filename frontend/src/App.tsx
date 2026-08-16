@@ -15,7 +15,8 @@ type ModelEntry = {
   weights: string
   status: 'active' | 'archived'
   created: string
-  arch: { backbone?: string; anchors: string; classes?: number; keypoints?: number }
+  arch: { backbone?: string; anchors: string; classes?: number; keypoints?: number;
+          chip_px?: number; min_size?: number; max_size?: number }
   train: { vehicles?: number; scenes?: string[]; epochs?: number; aug?: string; device?: string; script?: string }
   metrics: Record<string, string | number | null | string[] | Record<string, unknown>>
   notes: string
@@ -745,6 +746,8 @@ function InferenceView({ scenes, registry, refreshScenes }: { scenes: Scene[]; r
   const [modelId, setModelId] = useState('')
   const [thresh, setThresh] = useState(0.5)
   const [chip, setChip] = useState(64)
+  // the window a model was trained at; the control follows it when the model changes
+  const trainedChip = registry?.models.find((m) => m.id === modelId)?.arch?.chip_px ?? null
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<DetectResult | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -827,6 +830,9 @@ function InferenceView({ scenes, registry, refreshScenes }: { scenes: Scene[]; r
 
       <label className="field-label" style={{ marginTop: 10 }}>
         Window size: {chip} px · {chip * 3} m across
+        {trainedChip && chip !== trainedChip && (
+          <span className="hint" style={{ marginLeft: 8 }}>model trained at {trainedChip} px</span>
+        )}
       </label>
       <div className="segmented" style={{ maxWidth: 320 }}>
         {[32, 48, 64].map((c) => (
