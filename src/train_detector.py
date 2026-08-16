@@ -90,6 +90,12 @@ def load_coco():
     for im in d["images"]:
         anns = per_img.get(im["id"])
         if not anns:
+            # A chip with no annotations is a NEGATIVE: an annotator confirmed there is no
+            # vehicle here. Keep it, with an empty keypoint array. Skipping it (the old
+            # behaviour) would throw away the background examples entirely.
+            if im.get("negative"):
+                chip = np.asarray(Image.open(COCO / "images" / im["file_name"]).convert("RGB"))
+                by_scene.setdefault(im["scene"], []).append((chip, np.zeros((0, 3, 2), np.float32)))
             continue
         anns = sorted(anns, key=lambda a: (not a.get("center", True), a["id"]))  # center vehicle first
         chip = np.asarray(Image.open(COCO / "images" / im["file_name"]).convert("RGB"))
@@ -161,6 +167,10 @@ def augment(img, pts, rng, size):
 def to_target(kps):
     """torchvision Keypoint R-CNN target for N vehicles in a chip: N boxes + N labels + N
     keypoint-triples, all clipped into CHIP space. kps is float32[N,3,2]."""
+    if len(kps) == 0:                    # negative chip: no boxes, no keypoints, all background
+        return {"boxes": torch.zeros((0, 4), dtype=torch.float32),
+                "labels": torch.zeros((0,), dtype=torch.int64),
+                "keypoints": torch.zeros((0, 3, 3), dtype=torch.float32)}
     kps = kps.copy()
     kps[:, :, 0] = np.clip(kps[:, :, 0], 1, CHIP - 2)
     kps[:, :, 1] = np.clip(kps[:, :, 1], 1, CHIP - 2)
@@ -221,6 +231,13 @@ class ChipDS(torch.utils.data.Dataset):
         chip, kps = self.items[i % len(self.items)]          # chip SxSx3, kps (N,3,2) center-first
         S = chip.shape[0]
         margin = (S - CHIP) // 2
+        if len(kps) == 0:                                   # negative: crop anywhere, empty target
+            o = self.rng.integers(0, S - CHIP + 1, 2) if (self.aug and S > CHIP) else (margin, margin)
+            crop = chip[o[1]:o[1] + CHIP, o[0]:o[0] + CHIP]
+            if self.aug:
+                crop, _ = augment(crop, np.zeros((0, 2), np.float32), self.rng, CHIP)
+            img = torch.from_numpy(np.ascontiguousarray(crop)).permute(2, 0, 1).float() / 255.0
+            return img, to_target(np.zeros((0, 3, 2), np.float32))
         pts = kps.reshape(-1, 2).astype(np.float32).copy()
         if self.aug:
             chip, pts = augment(chip, pts, self.rng, S)
@@ -291,6 +308,8 @@ def eval_centered(model, items, thresh):
     model.eval()
     det, errs = 0, []
     for chip, kps in items:
+        if len(kps) == 0:                                    # negatives have nothing to recall
+            continue
         off = (chip.shape[0] - CHIP) // 2
         crop = chip[off:off + CHIP, off:off + CHIP]
         cen = kps[0] - off                                   # center vehicle keypoints in crop space
@@ -700,7 +719,9 @@ def main(a):
         "aspect_ratios": [float(x) for x in a.aspect_ratios.split(",")],
         "min_size": a.min_size, "max_size": a.max_size,
     }
-    print(f"train {len(train_items)} chips / {len(train_scenes)} scenes + {len(val_items)} val  |  "
+    n_neg = sum(1 for c, k in train_items if len(k) == 0)
+    print(f"train {len(train_items)} chips / {len(train_scenes)} scenes "
+          f"({len(train_items) - n_neg} with vehicles, {n_neg} background) + {len(val_items)} val  |  "
           f"held-out {held} ({sum(len(by_scene[s]) for s in held)} veh)", flush=True)
     print(f"anchors sizes={arch['anchor_sizes']} ratios={arch['aspect_ratios']}  "
           f"epochs={a.epochs} batch={a.batch} repeat={a.repeat} lr={a.lr}", flush=True)

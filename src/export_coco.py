@@ -89,6 +89,31 @@ def load_vehicles():
     return kept, dropped, gdf.crs
 
 
+def load_negatives():
+    """{scene: [(neg_id, x, y, category), ...]} from the optional `Negatives` layer.
+
+    These are places an annotator confirmed hold NO moving vehicle: road paint, rooftops,
+    water glint, rail, parked cars. They become chips with zero annotations, which teaches
+    the model background explicitly rather than leaving it to whatever happened to fall
+    around a truck. Absent layer is not an error; most exports will not have one yet."""
+    import fiona
+    try:
+        layers = fiona.listlayers(GPKG)
+    except Exception:
+        return {}, None
+    if "Negatives" not in layers:
+        return {}, None
+    g = gpd.read_file(GPKG, layer="Negatives")
+    if not len(g):
+        return {}, g.crs
+    g["scene"] = g["scene"].astype(str).str.strip()
+    by = defaultdict(list)
+    for _, r in g.iterrows():
+        by[r["scene"]].append((int(r.get("neg_id", 0)), r.geometry.x, r.geometry.y,
+                               (r.get("category") if "category" in g.columns else None)))
+    return dict(by), g.crs
+
+
 def _annotation(px, x0, y0, export, ann_id, img_id, vid, is_center):
     """One COCO keypoint annotation for a vehicle, in export-window pixel space."""
     kp = []
@@ -135,10 +160,11 @@ def main(chip, margin, out_dir, single):
     img_dir.mkdir(exist_ok=True)
 
     by_scene, dropped, src_crs = load_vehicles()
+    negatives, neg_crs = load_negatives()
 
     images, annotations = [], []
     img_id = ann_id = 0
-    n_vehicles = n_neighbors = n_reprojected = 0
+    n_vehicles = n_neighbors = n_reprojected = n_negatives = 0
 
     for scene in sorted(by_scene):
         tif = GEOTIFF_DIR / f"{scene}.tif"
@@ -209,9 +235,35 @@ def main(chip, margin, out_dir, single):
                 n_vehicles += 1
                 n_neighbors += len(members) - 1
 
+            # ---- background chips: same window, zero annotations ----
+            for neg_id, nx, ny, category in negatives.get(scene, []):
+                if neg_crs is not None and src.crs is not None and neg_crs != src.crs:
+                    xs_, ys_ = warp_points(neg_crs, src.crs, [nx], [ny])
+                    nxs, nys = xs_[0], ys_[0]
+                else:
+                    nxs, nys = nx, ny
+                c, ro = inv * (nxs, nys)
+                if not (0 <= c < W and 0 <= ro < H):
+                    print(f"  ! negative {neg_id} falls outside {scene} -- skipping")
+                    continue
+                x0 = max(0, min(int(round(c)) - half_exp, W - export))
+                y0 = max(0, min(int(round(ro)) - half_exp, H - export))
+                crop = rgb[y0:y0 + export, x0:x0 + export]
+                if crop.shape[:2] != (export, export):
+                    continue
+                fname = f"{scene}__neg{neg_id}.png"
+                Image.fromarray(crop).save(img_dir / fname)
+                img_id += 1
+                images.append({"id": img_id, "file_name": fname,
+                               "width": export, "height": export,
+                               "chip_px": chip, "margin_px": margin, "scene": scene,
+                               "negative": True, "category": category, "neg_id": neg_id})
+                n_negatives += 1
+
     coco = {
         "info": {"description": "SuperDove moving-echo keypoints (blue->red->green)",
-                 "chip_px": chip, "margin_px": margin, "export_px": export, "gsd_m": 3.0},
+                 "chip_px": chip, "margin_px": margin, "export_px": export, "gsd_m": 3.0,
+                 "negatives": n_negatives},
         "images": images,
         "annotations": annotations,
         "categories": [{
@@ -228,6 +280,8 @@ def main(chip, margin, out_dir, single):
           + (f"  ({n_reprojected} in a different CRS — points reprojected, rasters untouched)"
              if n_reprojected else ""))
     print(f"chips (1/vehicle)  : {n_vehicles}  (incomplete dropped: {dropped})")
+    if n_negatives or negatives:
+        print(f"background chips   : {n_negatives}  (zero-annotation negatives)")
     print(f"export             : {export}x{export} px (chip {chip} + 2*margin {margin}) · {mode}")
     print(f"chips dir          : {img_dir}")
     print(f"coco               : {out}")
