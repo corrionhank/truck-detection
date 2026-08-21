@@ -47,8 +47,6 @@ type Scene = {
   density?: number | null        // vehicles per km2 of imaged ground
 }
 
-// Model accuracy tracks density hard: dense scenes score F1 0.77 with SD 0.04, sparse
-// ones 0.49 with SD 0.25. Banding it makes that visible everywhere a scene is listed.
 // Click a column header to sort by it. First click puts the "interesting" end first
 // (largest for numbers, A-Z for text), second click reverses. Scene lists are long enough
 // that finding the sparsest or densest scene by eye is real work.
@@ -84,17 +82,6 @@ function SortHead({ cols, sk, dir, onClick }: {
   )
 }
 
-const DBAND = (d?: number | null) =>
-  d == null ? null : d >= 6 ? 'dense' : d >= 2.5 ? 'mid' : 'sparse'
-function Density({ d, km2 }: { d?: number | null; km2?: number | null }) {
-  const b = DBAND(d)
-  if (b == null) return km2 ? <span className="hint"> · {km2.toFixed(1)} km²</span> : null
-  return (
-    <span className="hint">
-      {' · '}{km2!.toFixed(1)} km² · <span className={`dband d-${b}`}>{d!.toFixed(1)}/km²</span>
-    </span>
-  )
-}
 type Dataset = {
   vehicles: number
   echoes: number
@@ -312,10 +299,7 @@ function DatasetView({ totalScenes }: { totalScenes: number }) {
                 <span className="hint num" style={{ width: 78 }}>{s.vehicles}</span>
                 <span className="hint num" style={{ width: 72 }}>{s.echoes}</span>
                 <span className="hint num" style={{ width: 82 }}>{s.km2 ? s.km2.toFixed(1) : '—'}</span>
-                <span className="num" style={{ width: 82 }}>
-                  {s.density == null ? <span className="hint">—</span>
-                    : <span className={`dband d-${DBAND(s.density)}`}>{s.density.toFixed(1)}</span>}
-                </span>
+                <span className="hint num" style={{ width: 82 }}>{s.density ? s.density.toFixed(1) : '—'}</span>
               </div>
               <div className="meter" style={{ height: 6 }}>
                 <div className="meter-fill" style={{ width: `${(100 * s.vehicles) / maxV}%` }} />
@@ -750,8 +734,7 @@ function TrainingView({ scenes, refresh }: { scenes: Scene[]; refresh: () => voi
         {scenes.map((s) => (
           <div key={s.name} className="row-between train-scene">
             <span className="mono" style={{ fontSize: 13 }}>{s.name}{' '}
-              <span className="hint">{s.vehicles ? `${s.vehicles} veh` : 'unlabeled'}</span>
-              <Density d={s.density} km2={s.km2} /></span>
+              <span className="hint">{s.vehicles ? `${s.vehicles} veh` : 'unlabeled'}{s.km2 ? ` · ${s.km2.toFixed(1)} km² · ${s.density?.toFixed(1) ?? '—'}/km²` : ''}</span></span>
             <span style={{ display: 'flex', gap: 6 }}>
               <button className={`role ${roles[s.name] === 'train' ? 'role-train' : ''}`}
                 onClick={() => setRole(s.name, 'train')} disabled={running}>train</button>
@@ -883,10 +866,7 @@ function ScenesView({ scenes, registry, refreshScenes }: { scenes: Scene[]; regi
               <span className="mono" style={{ fontSize: 13, flex: 1 }}>{s.name}{' '}
                 <span className="hint">{s.vehicles ? `${s.vehicles} veh` : 'unlabeled'}</span></span>
               <span className="hint num" style={{ width: 78 }}>{s.km2 ? s.km2.toFixed(1) : '—'}</span>
-              <span className="num" style={{ width: 78 }}>
-                {s.density == null ? <span className="hint">—</span>
-                  : <span className={`dband d-${DBAND(s.density)}`}>{s.density.toFixed(1)}</span>}
-              </span>
+              <span className="hint num" style={{ width: 78 }}>{s.density ? s.density.toFixed(1) : '—'}</span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 8, width: 150, justifyContent: 'flex-end' }}>
                 <span className={`badge-state ${si.cls}`}>{si.label}</span>
                 <button className="ghost" style={{ height: 26 }} disabled={busy === s.name}

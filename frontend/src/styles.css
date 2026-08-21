@@ -256,11 +256,6 @@ input[type=range] { accent-color: var(--accent); }
 .kp-gt.dim, .kp-pred.dim { opacity: .5; }
 .chipcard-nb { display: flex; gap: 6px; font-family: var(--font-mono); font-size: 9.5px; color: var(--text-3); padding: 0 2px 1px; opacity: .8; }
 
-/* --- annotation density band (scene lists) --- */
-.dband { font-weight: 600; padding: 0 4px; border-radius: 3px; }
-.dband.d-dense  { color: var(--danger); background: rgba(209,69,43,.14); }
-.dband.d-mid    { color: var(--accent-hover); background: rgba(221,160,50,.14); }
-.dband.d-sparse { color: var(--accent-2); background: rgba(22,181,194,.14); }
 
 /* held-out split: spatial = genuinely new ground, temporal = same ground re-imaged */
 .splitbadge { font-weight: 600; font-size: 10px; padding: 1px 5px; border-radius: 3px;
