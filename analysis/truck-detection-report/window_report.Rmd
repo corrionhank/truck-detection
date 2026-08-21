@@ -49,6 +49,11 @@ scenes <- read_csv("data/scenes.csv", show_col_types = FALSE)
 # separately rather than mixed into comparisons it cannot yet support.
 COMPLETE <- res |> filter(model != "nojitter-v1")
 USED <- unique(per$scene)
+
+# Configurations where the model does not actually run (see the robustness section) are
+# kept in every table and chart, but flagged, so nothing is dropped without saying so.
+FAILED <- function(d) d$model == "adamiak-v2" & d$window %in% c(24, 32)
+per <- per |> mutate(works = !FAILED(per))
 ```
 
 # What was run
@@ -185,13 +190,15 @@ the 32-pixel setting is the one that lands closest to parity at 0.91.
 ```{r box-helper, include=FALSE}
 box_metric <- function(var, title, cap) {
   per |>
-    filter(model != "nojitter-v1", !(model == "adamiak-v2" & window %in% c(24, 32))) |>
+    filter(model != "nojitter-v1") |>
     mutate(w = factor(paste0(window, "px"), levels = paste0(c(64, 48, 32, 24), "px"))) |>
     ggplot(aes(w, .data[[var]], colour = model, fill = model)) +
-    geom_boxplot(alpha = 0.16, width = 0.55, outlier.shape = NA, linewidth = 0.6,
-                 position = position_dodge(width = 0.7)) +
-    geom_point(position = position_jitterdodge(jitter.width = 0.12, dodge.width = 0.7),
+    geom_boxplot(aes(linetype = !works), alpha = 0.16, width = 0.55, outlier.shape = NA,
+                 linewidth = 0.6, position = position_dodge(width = 0.7)) +
+    geom_point(aes(shape = works), position = position_jitterdodge(jitter.width = 0.12, dodge.width = 0.7),
                alpha = 0.7, size = 2) +
+    scale_shape_manual(values = c(`TRUE` = 16, `FALSE` = 1), guide = "none") +
+    scale_linetype_manual(values = c(`FALSE` = "solid", `TRUE` = "dotted"), guide = "none") +
     scale_colour_manual(values = PAL) + scale_fill_manual(values = PAL) +
     scale_y_continuous(limits = c(0, 1), labels = percent_format(accuracy = 1)) +
     labs(title = title, subtitle = "Each point is one of the ten scenes; boxes show the middle half.",
@@ -201,7 +208,7 @@ box_metric <- function(var, title, cap) {
 
 ```{r fig-box-prec, fig.height=4.4}
 box_metric("P", "Per-scene precision",
-  "adamiak-v2 is the more precise model at every working window, and its spread is wider at both ends.")
+  "Hollow points and dotted boxes are the two adamiak-v2 configurations where the model does not run; they are shown rather than dropped.")
 ```
 
 Precision separates the two clearly. `adamiak-v2` runs higher at both working windows, but its
@@ -210,7 +217,7 @@ considerably worse than the headline suggests.
 
 ```{r fig-box-recall, fig.height=4.4}
 box_metric("R", "Per-scene recall",
-  "Both models vary widely in recall between scenes; this is where the sparse corridors show up.")
+  "Both models vary widely in recall between scenes. adamiak-v2 at 32 and 24 px is near zero because the model does not fire, not because the window is bad.")
 ```
 
 Recall is where both models are least consistent. The low outliers are the sparse scenes, where a
@@ -219,7 +226,7 @@ spread is the single largest contributor to the variance in the F1 panel below.
 
 ```{r fig-box-f1, fig.height=4.4}
 box_metric("F1", "Per-scene F1",
-  "The failed adamiak-v2 configurations are omitted. warmup-v1's results cluster far more tightly.")
+  "warmup-v1 clusters far more tightly at every window. The dotted adamiak-v2 boxes are its non-functioning configurations.")
 ```
 
 ```{r spread-table}
@@ -246,8 +253,9 @@ its lower count-ratio spread points to.
 
 ```{r density}
 per |>
-  filter(model != "nojitter-v1", !(model == "adamiak-v2" & window %in% c(24, 32))) |>
-  group_by(Model = model, Window = paste0(window, "px"), Band = band) |>
+  filter(model != "nojitter-v1") |>
+  mutate(Model = ifelse(works, model, paste0(model, " *"))) |>
+  group_by(Model, Window = paste0(window, "px"), Band = band) |>
   summarise(Scenes = n(), Vehicles = sum(vehicles),
             F1 = round(2 * sum(TP) / pmax(2 * sum(TP) + sum(FP) + sum(FN), 1), 3),
             Recall = round(sum(TP) / pmax(sum(TP) + sum(FN), 1), 3),
@@ -255,6 +263,10 @@ per |>
   mutate(Band = factor(Band, levels = c("dense", "mid", "sparse"))) |>
   arrange(Model, desc(Window), Band)
 ```
+
+Rows marked `*` are the two `adamiak-v2` configurations where the model does not run; their numbers
+are a failure to fire rather than a property of the density band, and are included only so nothing is
+dropped without explanation.
 
 Both models perform substantially better where traffic is heavier, and the gap is large. At 64 pixels
 `adamiak-v2` scores 0.778 on the dense scenes against 0.568 on the sparse ones, and `warmup-v1` 0.650
@@ -290,8 +302,9 @@ gtarea |>
 
 ```{r area-table}
 gtarea |>
-  filter(model != "nojitter-v1", !(model == "adamiak-v2" & window %in% c(24, 32))) |>
-  group_by(Model = model, Window = paste0(window, "px"), Quartile = quartile) |>
+  filter(model != "nojitter-v1") |>
+  mutate(Model = ifelse(model == "adamiak-v2" & window %in% c(24, 32), paste0(model, " *"), model)) |>
+  group_by(Model, Window = paste0(window, "px"), Quartile = quartile) |>
   summarise(Vehicles = n(), Detected = round(mean(found), 3), .groups = "drop") |>
   pivot_wider(names_from = Quartile, values_from = c(Vehicles, Detected)) |>
   arrange(Model, desc(Window))
