@@ -281,7 +281,7 @@ function DatasetView({ totalScenes }: { totalScenes: number }) {
   // useSort holds state, so it must run on every render: hoisted above the early returns
   const all = Object.entries(data?.per_scene ?? {}).map(([name, v]) => ({ name, ...v }))
   const { sorted: rows, key: sk, dir, click } = useSort(all, 'vehicles', {
-    name: (r) => r.name, vehicles: (r) => r.vehicles, echoes: (r) => r.echoes,
+    name: (r) => r.name, vehicles: (r) => r.vehicles,
     km2: (r) => r.km2 ?? -1, density: (r) => r.density ?? -1,
   })
 
@@ -289,6 +289,7 @@ function DatasetView({ totalScenes }: { totalScenes: number }) {
   if (!data) return <div className="card">Loading dataset…</div>
 
   const maxV = Math.max(1, ...rows.map((r) => r.vehicles))
+  const totalKm2 = rows.reduce((a, r) => a + (r.km2 ?? 0), 0)
   const centralia = rows
     .filter((r) => r.name.includes('Centralia'))
     .reduce((a, r) => a + r.vehicles, 0)
@@ -299,7 +300,7 @@ function DatasetView({ totalScenes }: { totalScenes: number }) {
       <div className="stat-row">
         <Stat label="Labeled scenes" value={data.scenes_labelled} />
         <Stat label="Vehicles" value={data.vehicles} />
-        <Stat label="Echoes (keypoints)" value={data.echoes} />
+        <Stat label="Imaged area" value={`${totalKm2.toFixed(0)} km²`} />
         <Stat label="Scenes on disk" value={totalScenes || '—'} />
       </div>
 
@@ -310,20 +311,18 @@ function DatasetView({ totalScenes }: { totalScenes: number }) {
         </div>
         <SortHead sk={sk} dir={dir} onClick={click} cols={[
           { k: 'name', label: 'scene' },
-          { k: 'vehicles', label: 'vehicles', w: '78px', right: true },
-          { k: 'echoes', label: 'echoes', w: '72px', right: true },
-          { k: 'km2', label: 'area km²', w: '82px', right: true },
-          { k: 'density', label: 'veh/km²', w: '82px', right: true },
+          { k: 'vehicles', label: 'vehicles', w: '90px', right: true },
+          { k: 'km2', label: 'area km²', w: '90px', right: true },
+          { k: 'density', label: 'veh/km²', w: '90px', right: true },
         ]} />
         <div className="list" style={{ gap: 8, marginTop: 4 }}>
           {rows.map((s) => (
             <div key={s.name}>
               <div className="srow" style={{ marginBottom: 3 }}>
                 <span className="mono" style={{ fontSize: 13, flex: 1 }}>{s.name}</span>
-                <span className="hint num" style={{ width: 78 }}>{s.vehicles}</span>
-                <span className="hint num" style={{ width: 72 }}>{s.echoes}</span>
-                <span className="hint num" style={{ width: 82 }}>{s.km2 ? s.km2.toFixed(1) : '—'}</span>
-                <span className="hint num" style={{ width: 82 }}>{s.density ? s.density.toFixed(1) : '—'}</span>
+                <span className="hint num" style={{ width: 90 }}>{s.vehicles}</span>
+                <span className="hint num" style={{ width: 90 }}>{s.km2 ? s.km2.toFixed(1) : '—'}</span>
+                <span className="hint num" style={{ width: 90 }}>{s.density ? s.density.toFixed(1) : '—'}</span>
               </div>
               <div className="meter" style={{ height: 6 }}>
                 <div className="meter-fill" style={{ width: `${(100 * s.vehicles) / maxV}%` }} />
