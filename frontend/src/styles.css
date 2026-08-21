@@ -258,6 +258,26 @@ input[type=range] { accent-color: var(--accent); }
 
 /* --- annotation density band (scene lists) --- */
 .dband { font-weight: 600; padding: 0 4px; border-radius: 3px; }
-.dband.d-dense  { color: var(--success); background: rgba(47,169,104,.14); }
+.dband.d-dense  { color: var(--danger); background: rgba(209,69,43,.14); }
 .dband.d-mid    { color: var(--accent-hover); background: rgba(221,160,50,.14); }
-.dband.d-sparse { color: var(--danger); background: rgba(209,69,43,.14); }
+.dband.d-sparse { color: var(--accent-2); background: rgba(22,181,194,.14); }
+
+/* held-out split: spatial = genuinely new ground, temporal = same ground re-imaged */
+.splitbadge { font-weight: 600; font-size: 10px; padding: 1px 5px; border-radius: 3px;
+              text-transform: uppercase; letter-spacing: .03em; }
+.splitbadge.s-spatial { color: var(--success); background: rgba(47,169,104,.16); }
+.splitbadge.s-temporal { color: var(--accent-hover); background: rgba(221,160,50,.16); }
+.splitbadge.s-unknown { color: var(--text-3); background: rgba(255,255,255,.06); }
+
+/* --- sortable column headers (scene lists) --- */
+.sorthead { display: flex; align-items: center; gap: 0; padding: 0 0 4px; margin-bottom: 4px;
+            border-bottom: 1px solid var(--border); }
+.sh { background: none; border: none; padding: 2px 4px; font-size: 10px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: .05em; color: var(--text-3); cursor: pointer;
+      display: inline-flex; align-items: center; gap: 3px; flex: 1; text-align: left; }
+.sh.r { justify-content: flex-end; text-align: right; }
+.sh:hover { color: var(--text); }
+.sh.on { color: var(--accent); }
+.sh .arrow { font-size: 8px; }
+.srow { display: flex; align-items: center; gap: 0; }
+.num { text-align: right; font-feature-settings: "tnum" 1; padding-right: 4px; }

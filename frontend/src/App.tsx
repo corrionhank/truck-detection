@@ -16,9 +16,22 @@ type ModelEntry = {
   status: 'active' | 'archived'
   created: string
   arch: { backbone?: string; anchors: string; classes?: number; keypoints?: number;
-          chip_px?: number; min_size?: number; max_size?: number }
+          chip_px?: number; min_size?: number; max_size?: number;
+          anchor_sizes?: number[]; aspect_ratios?: number[] }
   train: { vehicles?: number; scenes?: string[]; epochs?: number; aug?: string; device?: string; script?: string }
-  metrics: Record<string, string | number | null | string[] | Record<string, unknown>>
+  metrics: {
+    heldout_scenes?: string[]
+    heldout_scene?: string      // legacy singular, older registry entries
+    heldout_split_type?: Record<string, 'temporal' | 'spatial' | 'unknown'>
+    eval_thresh?: number
+    per_scene?: Record<string, {
+      vehicles?: number; centered_recall?: number; kp_err_px?: number
+      recall?: number; precision?: number; f1?: number
+      detected?: number; labelled?: number
+    }>
+    heldout_recall_centered_mean?: number | null
+    heldout_f1_mean?: number | null
+  }
   notes: string
   card?: string
 }
@@ -36,6 +49,41 @@ type Scene = {
 
 // Model accuracy tracks density hard: dense scenes score F1 0.77 with SD 0.04, sparse
 // ones 0.49 with SD 0.25. Banding it makes that visible everywhere a scene is listed.
+// Click a column header to sort by it. First click puts the "interesting" end first
+// (largest for numbers, A-Z for text), second click reverses. Scene lists are long enough
+// that finding the sparsest or densest scene by eye is real work.
+type SortDir = 'asc' | 'desc'
+function useSort<T>(rows: T[], initial: string, get: Record<string, (r: T) => number | string>) {
+  const [key, setKey] = useState(initial)
+  const [dir, setDir] = useState<SortDir>('desc')
+  const click = (k: string) => {
+    if (k === key) setDir(dir === 'desc' ? 'asc' : 'desc')
+    else { setKey(k); setDir(rows.length && typeof get[k](rows[0]) === 'string' ? 'asc' : 'desc') }
+  }
+  const sorted = [...rows].sort((a, b) => {
+    const x = get[key](a), y = get[key](b)
+    const c = typeof x === 'string' ? String(x).localeCompare(String(y)) : (x as number) - (y as number)
+    return dir === 'asc' ? c : -c
+  })
+  return { sorted, key, dir, click }
+}
+function SortHead({ cols, sk, dir, onClick }: {
+  cols: { k: string; label: string; w?: string; right?: boolean }[]
+  sk: string; dir: SortDir; onClick: (k: string) => void
+}) {
+  return (
+    <div className="sorthead">
+      {cols.map((c) => (
+        <button key={c.k} className={`sh ${sk === c.k ? 'on' : ''} ${c.right ? 'r' : ''}`}
+                style={c.w ? { width: c.w, flex: 'none' } : undefined}
+                onClick={() => onClick(c.k)} title={`sort by ${c.label}`}>
+          {c.label}<span className="arrow">{sk === c.k ? (dir === 'asc' ? '▲' : '▼') : ''}</span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
 const DBAND = (d?: number | null) =>
   d == null ? null : d >= 6 ? 'dense' : d >= 2.5 ? 'mid' : 'sparse'
 function Density({ d, km2 }: { d?: number | null; km2?: number | null }) {
@@ -187,7 +235,7 @@ export default function App() {
 
           {tab === 'dataset' && <DatasetView totalScenes={scenes.length} />}
           {tab === 'scenes' && <ScenesView scenes={scenes} registry={registry} refreshScenes={refreshScenes} />}
-          {tab === 'results' && <ResultsView />}
+          {tab === 'results' && <ResultsView registry={registry} onModels={() => setTab('models')} />}
           {tab === 'models' && <ModelsView registry={registry} refresh={refreshModels} onRun={() => setTab('inference')} />}
           {tab === 'training' && <TrainingView scenes={scenes} refresh={refreshModels} />}
           {tab === 'inference' && <InferenceView scenes={scenes} registry={registry} refreshScenes={refreshScenes} />}
@@ -219,14 +267,20 @@ function DatasetView({ totalScenes }: { totalScenes: number }) {
       .catch(() => setErr(true))
   }, [])
 
+  // useSort holds state, so it must run on every render: hoisted above the early returns
+  const all = Object.entries(data?.per_scene ?? {}).map(([name, v]) => ({ name, ...v }))
+  const { sorted: rows, key: sk, dir, click } = useSort(all, 'vehicles', {
+    name: (r) => r.name, vehicles: (r) => r.vehicles, echoes: (r) => r.echoes,
+    km2: (r) => r.km2 ?? -1, density: (r) => r.density ?? -1,
+  })
+
   if (err) return <div className="card">Backend not reachable — start it with <code>python3 backend/server.py</code></div>
   if (!data) return <div className="card">Loading dataset…</div>
 
-  const rows = Object.entries(data.per_scene).sort((a, b) => b[1].vehicles - a[1].vehicles)
-  const maxV = Math.max(1, ...rows.map(([, s]) => s.vehicles))
+  const maxV = Math.max(1, ...rows.map((r) => r.vehicles))
   const centralia = rows
-    .filter(([n]) => n.includes('Centralia'))
-    .reduce((a, [, s]) => a + s.vehicles, 0)
+    .filter((r) => r.name.includes('Centralia'))
+    .reduce((a, r) => a + r.vehicles, 0)
   const concPct = Math.round((100 * centralia) / Math.max(1, data.vehicles))
 
   return (
@@ -243,12 +297,25 @@ function DatasetView({ totalScenes }: { totalScenes: number }) {
           <div className="section-label">Labels per scene</div>
           <span className="hint">{concPct}% in the Centralia / south-I-5 corridor</span>
         </div>
+        <SortHead sk={sk} dir={dir} onClick={click} cols={[
+          { k: 'name', label: 'scene' },
+          { k: 'vehicles', label: 'vehicles', w: '78px', right: true },
+          { k: 'echoes', label: 'echoes', w: '72px', right: true },
+          { k: 'km2', label: 'area km²', w: '82px', right: true },
+          { k: 'density', label: 'veh/km²', w: '82px', right: true },
+        ]} />
         <div className="list" style={{ gap: 8, marginTop: 4 }}>
-          {rows.map(([name, s]) => (
-            <div key={name}>
-              <div className="row-between" style={{ marginBottom: 3 }}>
-                <span className="mono" style={{ fontSize: 13 }}>{name}</span>
-                <span className="hint">{s.vehicles} veh · {s.echoes} echoes<Density d={s.density} km2={s.km2} /></span>
+          {rows.map((s) => (
+            <div key={s.name}>
+              <div className="srow" style={{ marginBottom: 3 }}>
+                <span className="mono" style={{ fontSize: 13, flex: 1 }}>{s.name}</span>
+                <span className="hint num" style={{ width: 78 }}>{s.vehicles}</span>
+                <span className="hint num" style={{ width: 72 }}>{s.echoes}</span>
+                <span className="hint num" style={{ width: 82 }}>{s.km2 ? s.km2.toFixed(1) : '—'}</span>
+                <span className="num" style={{ width: 82 }}>
+                  {s.density == null ? <span className="hint">—</span>
+                    : <span className={`dband d-${DBAND(s.density)}`}>{s.density.toFixed(1)}</span>}
+                </span>
               </div>
               <div className="meter" style={{ height: 6 }}>
                 <div className="meter-fill" style={{ width: `${(100 * s.vehicles) / maxV}%` }} />
@@ -266,62 +333,115 @@ function DatasetView({ totalScenes }: { totalScenes: number }) {
   )
 }
 
-function ResultsView() {
-  const cv = [
-    { scene: 'Centralia_01', recall: '58 / 58', pct: 100, err: '0.9' },
-    { scene: 'Centralia_02', recall: '54 / 54', pct: 100, err: '0.8' },
-    { scene: 'Tacoma-Centralia_01', recall: '74 / 94', pct: 79, err: '1.2' },
-    { scene: 'Tacoma-Centralia_02', recall: '92 / 101', pct: 91, err: '1.0' },
-  ]
+// Results for whichever model is ACTIVE in the registry, never hardcoded. The page used to
+// carry fixed numbers from a 339-vehicle model two generations back, which quietly went stale
+// every time a new model was trained or the active pointer moved.
+const PCT = (v?: number | null) => (v == null ? '—' : `${Math.round(v * 100)}%`)
+const NUM = (v?: number | null, d = 2) => (v == null ? '—' : v.toFixed(d))
+
+function ResultsView({ registry, onModels }: { registry: Registry | null; onModels: () => void }) {
+  if (!registry) return <div className="card">Loading the registry… (start the backend if this hangs)</div>
+  const m = registry.models.find((x) => x.id === registry.active)
+  if (!m) return <div className="card">No active model set. Pick one in the Models tab.</div>
+
+  const mt = m.metrics || {}
+  const held = mt.heldout_scenes ?? []
+  const per = mt.per_scene ?? {}
+  const splits = mt.heldout_split_type ?? {}
+  const rows = held.map((sc) => ({ scene: sc, split: splits[sc], ...(per[sc] ?? {}) }))
+  const t = m.train || {}
+  const a = m.arch || ({} as ModelEntry['arch'])
+  // a held-out scene that overlaps trained ground is a repeat visit, not a transfer test
+  const anyTemporal = Object.values(splits).some((v) => v === 'temporal')
+
   return (
     <>
       <div className="card">
-        <div className="section-label">Model</div>
-        <p style={{ margin: '6px 0 0' }}>
-          <b>Keypoint R-CNN</b> (ResNet-50 + FPN), fine-tuned on the 339-vehicle set. Predicts 3 keypoints
-          per vehicle — the blue/red/green moving-echo streak. Trained on CPU (the Apple GPU / MPS diverges).
-        </p>
-      </div>
-
-      <div className="stat-row">
-        <Stat label="Within-corridor recall" value="91%" />
-        <Stat label="Keypoint error" value="~1 px" />
-        <Stat label="Full-scene recall" value="40%" />
-        <Stat label="Full-scene precision" value="68%" />
-      </div>
-
-      <div className="card">
-        <div className="section-label">Within-corridor generalization</div>
-        <p className="hint" style={{ marginTop: 2 }}>
-          Leave-one-scene-out CV on the 4 Centralia scenes — train on 3, test on the unseen one
-          (centered chip per labeled vehicle).
-        </p>
-        <div className="list" style={{ gap: 8 }}>
-          {cv.map((r) => (
-            <div key={r.scene}>
-              <div className="row-between" style={{ marginBottom: 3 }}>
-                <span className="mono" style={{ fontSize: 13 }}>{r.scene}</span>
-                <span className="hint">recall {r.recall} ({r.pct}%) · {r.err} px</span>
-              </div>
-              <div className="meter" style={{ height: 6 }}>
-                <div className="meter-fill" style={{ width: `${r.pct}%` }} />
-              </div>
-            </div>
-          ))}
+        <div className="row-between">
+          <div className="section-label">Active model</div>
+          <button className="link" onClick={onModels}>change in Models →</button>
         </div>
+        <p style={{ margin: '6px 0 0' }}>
+          <b>{m.name}</b> <span className="chip-model">{m.id}</span>
+        </p>
+        <p className="hint" style={{ margin: '6px 0 0' }}>
+          Keypoint R-CNN (ResNet-50 + FPN) predicting 3 keypoints per vehicle, the blue → red → green
+          moving-echo streak. Trained on {t.vehicles ?? '?'} chips across {t.scenes?.length ?? '?'} scenes,
+          {' '}{t.epochs ?? '?'} epochs on {t.device ?? 'cpu'}. Anchors {a.anchor_sizes?.join('/') ?? a.anchors}
+          {a.chip_px ? ` · ${a.chip_px} px chips` : ''}. Registered {m.created}.
+        </p>
+        {m.notes && <p className="hint" style={{ margin: '8px 0 0' }}>{m.notes}</p>}
       </div>
 
+      {held.length === 0 ? (
+        <div className="card">
+          <div className="section-label">No held-out evaluation</div>
+          <p style={{ margin: '6px 0 0' }}>
+            This model was trained on <b>every</b> scene, so no labelled data was kept back and there are
+            no honest accuracy numbers to show. Any metric measured on its training scenes would be
+            inflated.
+          </p>
+          <p className="hint" style={{ margin: '8px 0 0' }}>
+            Deployment models are for running on new unlabelled imagery. To see real numbers, activate a
+            model trained with a held-out scene, or run this one from the Inference tab on a scene it was
+            not trained on and read the split badge there.
+          </p>
+        </div>
+      ) : (
+        <>
+          <div className="stat-row">
+            <Stat label="Centered-chip recall" value={PCT(mt.heldout_recall_centered_mean)} />
+            <Stat label="Keypoint error" value={rows.length && rows[0].kp_err_px != null
+              ? `~${NUM(rows.reduce((x, r) => x + (r.kp_err_px ?? 0), 0) / rows.length, 1)} px` : '—'} />
+            <Stat label="Full-scene recall" value={PCT(rows.length
+              ? rows.reduce((x, r) => x + (r.recall ?? 0), 0) / rows.length : null)} />
+            <Stat label="Full-scene F1" value={NUM(mt.heldout_f1_mean, 3)} />
+          </div>
+
+          <div className="card">
+            <div className="section-label">Held-out scenes (never trained on)</div>
+            <p className="hint" style={{ marginTop: 2 }}>
+              <b>Centered-chip recall</b> hands the model one 64 px crop per labelled vehicle and asks if it
+              notices: the easy question. <b>Full-scene</b> R/P/F1 slides it across the raw scene with no
+              hints, at threshold {mt.eval_thresh ?? '—'}: the deployable one. The gap between them is the
+              difficulty of the task.
+            </p>
+            <div className="list" style={{ gap: 10, marginTop: 6 }}>
+              {rows.map((r) => (
+                <div key={r.scene}>
+                  <div className="row-between" style={{ marginBottom: 3 }}>
+                    <span className="mono" style={{ fontSize: 13 }}>{r.scene}{' '}
+                      {r.split && <span className={`splitbadge s-${r.split}`}>{r.split}</span>}
+                    </span>
+                    <span className="hint">
+                      {r.vehicles ?? '?'} veh · centered {PCT(r.centered_recall)} · {NUM(r.kp_err_px, 1)} px
+                      {r.f1 != null && <> · full R/P/F1 {NUM(r.recall)}/{NUM(r.precision)}/<b>{NUM(r.f1)}</b></>}
+                    </span>
+                  </div>
+                  <div className="meter" style={{ height: 6 }}>
+                    <div className="meter-fill" style={{ width: `${100 * (r.centered_recall ?? 0)}%` }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+            {anyTemporal && (
+              <p className="hint" style={{ margin: '10px 0 0' }}>
+                A <b>temporal</b> hold-out is the same ground re-imaged on a later date, not new terrain, so
+                it measures repeat-visit performance rather than transfer. Only <b>spatial</b> rows are
+                evidence the model works somewhere it has never seen.
+              </p>
+            )}
+          </div>
+        </>
+      )}
+
       <div className="card">
-        <div className="section-label">Full-scene deployment (held-out Tacoma-Centralia_01)</div>
-        <p style={{ margin: '6px 0' }}>
-          Sliding-window detection over the whole raw scene: <b>38 true positives</b>, <b>18 false positives</b>,
-          <b> 56 missed</b> → 40% recall, 68% precision.
-        </p>
-        <p className="hint" style={{ margin: 0 }}>
-          The gap from 91% is the deployment reality: the model <b>recognizes</b> a centered echo well but is
-          weaker at <b>finding</b> them across a full scene. False positives are bright road/lane-paint features
-          (not off-road hallucinations); most misses are real echoes in <b>dense traffic</b>, where the
-          detection dedup merges neighboring trucks — a method fix, not a data problem.
+        <div className="section-label">Reading these numbers</div>
+        <p className="hint" style={{ margin: '6px 0 0' }}>
+          Precision is a <b>lower bound</b>: only clear, well-formed echoes were labelled, so a detection
+          landing on a real but unlabelled truck counts against it. Registry figures also use the deployed
+          inference settings (window top-1, 96 m duplicate radius, no keypoint gate); the Inference tab can
+          run other operating points, which move these numbers substantially.
         </p>
       </div>
     </>
@@ -718,7 +838,11 @@ function ScenesView({ scenes, registry, refreshScenes }: { scenes: Scene[]; regi
     } finally { setBusy(null) }
   }
 
-  const rows = scenes.map((s) => ({ ...s, split: evalSplit(model, s.name) }))
+  const all = scenes.map((s) => ({ ...s, split: evalSplit(model, s.name) }))
+  const { sorted: rows, key: sk, dir, click } = useSort(all, 'vehicles', {
+    name: (r) => r.name, vehicles: (r) => r.vehicles,
+    km2: (r) => r.km2 ?? -1, density: (r) => r.density ?? -1, split: (r) => r.split,
+  })
   const counts: Record<Split, number> = { train: 0, heldout: 0, unseen: 0 }
   rows.forEach((r) => { counts[r.split]++ })
 
@@ -745,14 +869,25 @@ function ScenesView({ scenes, registry, refreshScenes }: { scenes: Scene[]; regi
       </p>
 
       <div className="list" style={{ gap: 6 }}>
+        <SortHead sk={sk} dir={dir} onClick={click} cols={[
+          { k: 'name', label: 'scene' },
+          { k: 'vehicles', label: 'vehicles', w: '76px', right: true },
+          { k: 'km2', label: 'area km²', w: '78px', right: true },
+          { k: 'density', label: 'veh/km²', w: '78px', right: true },
+          { k: 'split', label: 'status', w: '150px' },
+        ]} />
         {rows.map((s) => {
           const si = SPLIT[s.split]
           return (
-            <div key={s.name} className="row-between train-scene">
-              <span className="mono" style={{ fontSize: 13 }}>{s.name}{' '}
-                <span className="hint">{s.vehicles ? `${s.vehicles} veh` : 'unlabeled'}</span>
-                <Density d={s.density} km2={s.km2} /></span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div key={s.name} className="srow train-scene">
+              <span className="mono" style={{ fontSize: 13, flex: 1 }}>{s.name}{' '}
+                <span className="hint">{s.vehicles ? `${s.vehicles} veh` : 'unlabeled'}</span></span>
+              <span className="hint num" style={{ width: 78 }}>{s.km2 ? s.km2.toFixed(1) : '—'}</span>
+              <span className="num" style={{ width: 78 }}>
+                {s.density == null ? <span className="hint">—</span>
+                  : <span className={`dband d-${DBAND(s.density)}`}>{s.density.toFixed(1)}</span>}
+              </span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8, width: 150, justifyContent: 'flex-end' }}>
                 <span className={`badge-state ${si.cls}`}>{si.label}</span>
                 <button className="ghost" style={{ height: 26 }} disabled={busy === s.name}
                   onClick={() => remove(s.name, !!s.vehicles)}>
