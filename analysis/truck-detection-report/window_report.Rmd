@@ -94,23 +94,49 @@ section 3.
 
 # Window size makes almost no difference
 
-```{r fig-window, fig.height=4.6, fig.width=11}
-COMPLETE |>
-  select(model, window, Precision = P, Recall = R, F1, `Count ratio` = ratio) |>
-  pivot_longer(c(Precision, Recall, F1, `Count ratio`), names_to = "metric", values_to = "value") |>
-  mutate(metric = factor(metric, levels = c("Precision", "Recall", "F1", "Count ratio"))) |>
-  ggplot(aes(window, value, colour = model)) +
-  geom_hline(data = tibble(metric = factor("Count ratio",
-               levels = c("Precision", "Recall", "F1", "Count ratio")), y = 1),
-             aes(yintercept = y), linetype = "dashed", colour = "grey45") +
-  geom_line(linewidth = 1) + geom_point(size = 2.4) +
-  facet_wrap(~ metric, nrow = 1, scales = "free_y") +
+```{r fig-window, fig.height=4.4, fig.width=11}
+# Window is an ordered factor, not a continuous axis: the four sizes are the levels tested,
+# not samples of a continuum, and even spacing stops 32/24 from crowding.
+# Precision, recall and F1 share one 0-1 axis because they are the same unit; a free axis
+# per panel would turn a 0.06 range into a dramatic slope.
+wf <- function(d) factor(paste0(d$window, "px"), levels = paste0(c(64, 48, 32, 24), "px"))
+pr <- COMPLETE |>
+  mutate(w = wf(COMPLETE), works = !(model == "adamiak-v2" & window %in% c(24, 32))) |>
+  select(model, w, works, Precision = P, Recall = R, F1) |>
+  pivot_longer(c(Precision, Recall, F1), names_to = "metric", values_to = "value") |>
+  mutate(metric = factor(metric, levels = c("Precision", "Recall", "F1")))
+
+ggplot(pr, aes(w, value, colour = model, group = model)) +
+  geom_line(linewidth = 0.9, alpha = 0.45, linetype = "22") +
+  geom_line(data = filter(pr, works), linewidth = 1) +
+  geom_point(aes(shape = works), size = 2.6, fill = "white", stroke = 1.1) +
+  facet_wrap(~ metric, nrow = 1) +
+  scale_shape_manual(values = c(`TRUE` = 21, `FALSE` = 4), guide = "none") +
   scale_colour_manual(values = PAL) +
-  scale_x_reverse(breaks = c(64, 48, 32, 24), labels = paste0(c(64, 48, 32, 24), "px")) +
-  labs(title = "Precision, recall, F1 and count ratio by window size",
-       subtitle = "Each point at its own best operating point. The dashed line is count parity.",
-       x = "window size", y = NULL,
-       caption = "warmup-v1 trades recall for precision as the window shrinks, leaving F1 flat. adamiak-v2's fall below 48px is the model failing to run.")
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2), labels = percent_format(accuracy = 1)) +
+  labs(title = "Precision, recall and F1 by window size",
+       subtitle = "Common 0-100% axis across all three panels. Each point at its own best operating point.",
+       x = NULL, y = NULL,
+       caption = "Crosses on a dashed segment are configurations where the model does not run; they are not a trend.")
+```
+
+```{r fig-ratio, fig.height=3.6, fig.width=7}
+COMPLETE |>
+  mutate(w = wf(COMPLETE), works = !(model == "adamiak-v2" & window %in% c(24, 32))) |>
+  ggplot(aes(w, ratio, colour = model, group = model)) +
+  geom_hline(yintercept = 1, linetype = "dashed", colour = "grey40") +
+  geom_line(linewidth = 0.9, alpha = 0.45, linetype = "22") +
+  geom_line(data = ~ filter(.x, works), linewidth = 1) +
+  geom_point(aes(shape = works), size = 2.6, fill = "white", stroke = 1.1) +
+  scale_shape_manual(values = c(`TRUE` = 21, `FALSE` = 4), guide = "none") +
+  scale_colour_manual(values = PAL) +
+  scale_y_continuous(limits = c(0, 1.4), breaks = seq(0, 1.4, 0.2)) +
+  annotate("text", x = 0.6, y = 1, label = "parity", vjust = -0.5, hjust = 0,
+           size = 3.1, colour = "grey40") +
+  labs(title = "Detections reported per labelled vehicle",
+       subtitle = "Shown separately: a ratio, not a rate, so it does not share the axis above.",
+       x = NULL, y = "detections ÷ vehicles present",
+       caption = "warmup-v1 crosses parity between 48 and 32 px. adamiak-v2 sits just under it at its working windows.")
 ```
 
 For `warmup-v1`, the model that functions at every window, F1 across 64, 48, 32 and 24 px is 0.616,
@@ -167,18 +193,25 @@ rather than a preference.
 
 ```{r box-helper, include=FALSE}
 box_metric <- function(var, title, cap) {
-  per |>
+  d <- per |>
     filter(model != "nojitter-v1") |>
-    mutate(w = factor(paste0(window, "px"), levels = paste0(c(64, 48, 32, 24), "px"))) |>
-    ggplot(aes(w, .data[[var]], colour = model, fill = model)) +
-    geom_boxplot(aes(linetype = !works), alpha = 0.16, width = 0.55, outlier.shape = NA,
-                 linewidth = 0.6, position = position_dodge(width = 0.7)) +
-    geom_point(aes(shape = works), position = position_jitterdodge(jitter.width = 0.12, dodge.width = 0.7),
-               alpha = 0.7, size = 2) +
-    scale_shape_manual(values = c(`TRUE` = 16, `FALSE` = 1), guide = "none") +
-    scale_linetype_manual(values = c(`FALSE` = "solid", `TRUE` = "dotted"), guide = "none") +
+    mutate(w = factor(paste0(window, "px"), levels = paste0(c(64, 48, 32, 24), "px")))
+  # Dodge on `model` ONLY. Mapping linetype or shape adds them to the dodge grouping,
+  # which splits each model into two slots and pulls its box away from its own points.
+  # Failed configurations are marked with an annotation layer instead, outside the
+  # positional aesthetics, at the dodged x offset (2 models, dodge width 0.7 -> +/-0.175).
+  fail <- d |> filter(!works) |> distinct(w) |>
+    mutate(x = as.numeric(w) - 0.175, y = 0.035)
+  ggplot(d, aes(w, .data[[var]], colour = model, fill = model)) +
+    geom_boxplot(alpha = 0.16, width = 0.55, outlier.shape = NA, linewidth = 0.6,
+                 position = position_dodge(width = 0.7)) +
+    geom_point(position = position_jitterdodge(jitter.width = 0.12, dodge.width = 0.7),
+               alpha = 0.75, size = 1.9) +
+    geom_text(data = fail, aes(x = x, y = y, label = "model does not run"),
+              inherit.aes = FALSE, size = 2.7, colour = "#2a78d6", fontface = "italic") +
     scale_colour_manual(values = PAL) + scale_fill_manual(values = PAL) +
-    scale_y_continuous(limits = c(0, 1), labels = percent_format(accuracy = 1)) +
+    scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.25),
+                       labels = percent_format(accuracy = 1)) +
     labs(title = title, subtitle = "Each point is one of the ten scenes; boxes show the middle half.",
          x = NULL, y = NULL, caption = cap)
 }
@@ -186,7 +219,7 @@ box_metric <- function(var, title, cap) {
 
 ```{r fig-box-f1, fig.height=4.3}
 box_metric("F1", "Per-scene F1",
-  "warmup-v1 clusters far more tightly at every window. Hollow points and dotted boxes are adamiak-v2's non-functioning configurations, shown rather than dropped.")
+  "warmup-v1 clusters far more tightly at every window. The two adamiak-v2 configurations that do not run are labelled; their spread is a failure to fire, not a consistency measurement.")
 ```
 
 ```{r spread-table}
@@ -211,7 +244,7 @@ headline number, and its tighter count-ratio spread points the same way.
 
 ```{r fig-box-prec, fig.height=4.3}
 box_metric("P", "Per-scene precision",
-  "adamiak-v2 is the more precise model at every working window, and its spread is wider at both ends.")
+  "adamiak-v2 is the more precise model at both working windows, and its spread is wider at both ends.")
 ```
 
 ```{r fig-box-recall, fig.height=4.3}
