@@ -197,6 +197,81 @@ model tolerate a change of input size.
 So window size is a genuinely free parameter only for those three. For the rest, moving away from the
 size they were built for costs most of the recall, and the window is effectively fixed by training.
 
+# The window and threshold surface
+
+The two charts below vary window size and confidence threshold together, one cell per
+combination, for both models. The gate is held at each model's own 64 px value, which is what
+you would actually deploy, and the duplicate radius at 8 px. So only the two axes move.
+
+```{r surface-f1, fig.height=4.4, fig.width=11}
+surf <- read_csv("data/window_threshold_surface.csv", show_col_types = FALSE) |>
+  mutate(w = factor(paste0(window, "px"), levels = paste0(c(24, 32, 48, 64), "px")))
+peak <- surf |> group_by(model) |> slice_max(F1, n = 1) |> ungroup()
+
+ggplot(surf, aes(threshold, w, fill = F1)) +
+  geom_tile(colour = "white", linewidth = 0.4) +
+  geom_point(data = peak, shape = 21, size = 3.4, stroke = 1.4, fill = NA, colour = "black") +
+  facet_wrap(~ model, nrow = 1) +
+  scale_fill_viridis_c(option = "mako", direction = -1, limits = c(0, 0.75),
+                       name = "F1", labels = number_format(accuracy = 0.01)) +
+  scale_x_continuous(breaks = seq(0.05, 0.95, 0.15)) +
+  labs(title = "F1 across window size and confidence threshold",
+       subtitle = "Gate fixed at each model's 64 px optimum, dedup 8 px. Circled cell is that model's peak.",
+       x = "confidence threshold", y = NULL,
+       caption = "adamiak-v2 has one narrow good region at 64 and 48 px. warmup-v1 is broadly flat, so no setting is much better than any other.")
+```
+
+The two surfaces look nothing alike. `adamiak-v2` has a single bright region confined to 64 and
+48 px at low thresholds, falling away sharply in every direction, with near-zero rows at 32 and
+24 px where its confidence has collapsed. `warmup-v1` is almost uniform: every cell between 0.58
+and 0.62, so the choice of window and threshold barely matters and no combination is much better
+than any other.
+
+That is the same finding as the line charts, seen at once. It also shows why the earlier
+single-scene test misled: with the gate fixed and only the threshold moving, small windows do look
+better for `warmup-v1` at high thresholds, and that is a corner of this surface rather than a
+general property.
+
+```{r surface-ratio, fig.height=4.4, fig.width=11}
+# geom_contour needs a continuous axis; the window axis here is a discrete factor, so
+# the parity crossing is marked per row instead: the cell whose ratio is nearest 1.
+parity <- surf |> group_by(model, w) |> slice_min(abs(ratio - 1), n = 1) |> ungroup()
+
+ggplot(surf, aes(threshold, w, fill = ratio)) +
+  geom_tile(colour = "white", linewidth = 0.4) +
+  geom_tile(data = parity, colour = "black", linewidth = 0.8, fill = NA, width = 0.05) +
+  geom_text(data = parity, aes(label = sprintf("%.2f", ratio)), size = 2.7,
+            vjust = -1.6, colour = "grey15") +
+  facet_wrap(~ model, nrow = 1) +
+  scale_fill_gradient2(low = "#2166ac", mid = "#f7f7f7", high = "#b2182b",
+                       midpoint = 1, limits = c(0.2, 1.8), oob = squish,
+                       name = "detections\n÷ vehicles") +
+  scale_x_continuous(breaks = seq(0.05, 0.95, 0.15)) +
+  labs(title = "Count ratio across window size and confidence threshold",
+       subtitle = "White is parity. Blue under-reports, red over-reports. Outlined cell is the closest each row gets to parity.",
+       x = "confidence threshold", y = NULL,
+       caption = "Each window reaches parity at a different threshold, and none of those thresholds is where F1 peaks.")
+```
+
+The count surface is the more useful of the two for a counting programme, and it says something the
+F1 surface does not. **Each working window reaches parity at a different threshold**, marked by the
+outlined cell in each row. `warmup-v1` hits 1.00 at threshold 0.30 with a 64 px window, 0.99 at 0.40
+with 48 px, and 1.01 at 0.25 with both 32 and 24 px. A single threshold does not serve every window.
+
+`adamiak-v2` never reaches parity at 32 or 24 px: the closest those rows get is 0.21 and 0.51, at the
+very lowest threshold. Having lost most of its confidence, it cannot produce enough detections to
+count correctly at any setting.
+
+More importantly, **parity does not sit where F1 peaks**, and the two models differ in how much that
+costs. `adamiak-v2` at 64 px peaks on F1 at 0.704 with a ratio of 0.966, so its best detection setting
+is already close to counting correctly and nothing has to be traded. `warmup-v1` at 64 px peaks on F1
+at 0.616 while over-reporting by 19 percent, and reaching parity means pushing the threshold from 0.10
+to 0.30, which drops F1 to 0.595.
+
+That is a small price, and it is the one worth paying if the deliverable is a count. It also means the
+setting to tune against is the outlined cell in this chart rather than the bright band in the first
+one.
+
 # Consistency between scenes
 
 ```{r box-helper, include=FALSE}
