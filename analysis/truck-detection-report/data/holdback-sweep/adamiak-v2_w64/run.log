@@ -1,0 +1,5 @@
+[10:03:19] model=kprcnn-adamiak-v2 scenes=3 thresholds=[0.3, 0.5, 0.7] threads=6 top1_only=False match=6.0px(18m)
+[10:06:55] [1/3] Yakima-Toppenish_03_20260614 [unseen] 2159 dets / 1349 win / 217s — thr0.3: n=112 F1=0.2014 | thr0.5: n=47 F1=0.3514 | thr0.7: n=21 F1=0.4167
+[10:10:12] [2/3] Yakima-Toppenish_01_20260503 [held-out:unspecified] 1186 dets / 1348 win / 196s — thr0.3: n=69 F1=0.1915 | thr0.5: n=18 F1=0.3256 | thr0.7: n=8 F1=0.3636
+[10:12:01] [3/3] auburn-snoqualmie_01_20260425 [held-out:unspecified] 391 dets / 747 win / 109s — thr0.3: n=39 F1=0.6667 | thr0.5: n=25 F1=0.6939 | thr0.7: n=14 F1=0.5789
+[10:12:01] DONE -> analysis/truck-detection-report/data/holdback-sweep/adamiak-v2_w64/detections.csv  analysis/truck-detection-report/data/holdback-sweep/adamiak-v2_w64/stats.csv  analysis/truck-detection-report/data/holdback-sweep/adamiak-v2_w64/scenes.csv

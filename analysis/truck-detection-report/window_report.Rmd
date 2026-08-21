@@ -126,18 +126,45 @@ completeness but measure brittleness, not window size.
 
 # Window size makes very little difference
 
-```{r fig-window, fig.height=4.6}
+```{r fig-window, fig.height=4.4, fig.width=11}
 COMPLETE |>
-  ggplot(aes(window, F1, colour = model)) +
+  select(model, window, Precision = P, Recall = R, F1) |>
+  pivot_longer(c(Precision, Recall, F1), names_to = "metric", values_to = "value") |>
+  mutate(metric = factor(metric, levels = c("Precision", "Recall", "F1"))) |>
+  ggplot(aes(window, value, colour = model)) +
+  geom_line(linewidth = 1) + geom_point(size = 2.4) +
+  facet_wrap(~ metric, nrow = 1) +
+  scale_colour_manual(values = PAL) +
+  scale_x_reverse(breaks = c(64, 48, 32, 24), labels = paste0(c(64, 48, 32, 24), "px")) +
+  scale_y_continuous(limits = c(0, 0.85), labels = percent_format(accuracy = 1)) +
+  labs(title = "Precision, recall and F1 by sliding-window size",
+       subtitle = "Each point at its own best operating point. Ten scenes, 580 labelled vehicles.",
+       x = "window size", y = NULL,
+       caption = "warmup-v1 trades recall for precision as the window shrinks, leaving F1 flat. adamiak-v2's fall below 48px is the model failing to run.")
+```
+
+The three panels show the mechanism rather than just the outcome. As the window shrinks, `warmup-v1`
+moves up in precision and down in recall by almost the same amount, which is why the F1 panel looks
+flat. Nothing is being gained or lost overall; the operating point is sliding along the same
+precision-recall curve.
+
+```{r fig-count-ratio, fig.height=4.2}
+COMPLETE |>
+  ggplot(aes(window, ratio, colour = model)) +
+  geom_hline(yintercept = 1, linetype = "dashed", colour = "grey35") +
   geom_line(linewidth = 1) + geom_point(size = 2.6) +
   scale_colour_manual(values = PAL) +
   scale_x_reverse(breaks = c(64, 48, 32, 24), labels = paste0(c(64, 48, 32, 24), "px")) +
-  scale_y_continuous(limits = c(0, 0.8)) +
-  labs(title = "F1 by sliding-window size, each point at its own best operating point",
-       subtitle = "Ten scenes, 580 labelled vehicles.",
-       x = "window size", y = "F1",
-       caption = "warmup-v1 is nearly flat across the range. adamiak-v2's fall below 48px is the model failing to run, not a window effect.")
+  scale_y_continuous(limits = c(0, 1.4)) +
+  labs(title = "Detections reported per labelled vehicle",
+       subtitle = "The dashed line is count parity, one detection per vehicle present.",
+       x = "window size", y = "count ratio",
+       caption = "warmup-v1 crosses parity between 48 and 32 px; adamiak-v2 sits just under it at 64.")
 ```
+
+For a counting deliverable the third panel matters more than F1. `warmup-v1` over-reports by 19 percent
+at 64 pixels and crosses parity between 48 and 32, landing at 0.91. `adamiak-v2` sits at 0.97 at its
+working window. Those are the two configurations a count could actually be built on.
 
 For `warmup-v1`, the model that functions at every window, F1 across 64, 48, 32 and 24 pixels is
 0.616, 0.617, 0.630 and 0.622. That is a spread of 0.014, with a shallow peak at 32 pixels. For
@@ -155,20 +182,44 @@ the 32-pixel setting is the one that lands closest to parity at 0.91.
 
 # Consistency between scenes
 
-```{r fig-spread, fig.height=5}
-per |>
-  filter(model != "nojitter-v1", !(model == "adamiak-v2" & window %in% c(24, 32))) |>
-  mutate(w = factor(paste0(window, "px"), levels = paste0(c(64, 48, 32, 24), "px"))) |>
-  ggplot(aes(w, F1, colour = model, fill = model)) +
-  geom_boxplot(alpha = 0.16, width = 0.55, outlier.shape = NA, linewidth = 0.6,
-               position = position_dodge(width = 0.7)) +
-  geom_point(position = position_jitterdodge(jitter.width = 0.12, dodge.width = 0.7),
-             alpha = 0.7, size = 2) +
-  scale_colour_manual(values = PAL) + scale_fill_manual(values = PAL) +
-  scale_y_continuous(limits = c(0, 1), labels = percent_format(accuracy = 1)) +
-  labs(title = "Per-scene F1 at each window", subtitle = "Each point is one of the ten scenes.",
-       x = NULL, y = "F1",
-       caption = "The failed adamiak-v2 configurations are omitted. warmup-v1's results cluster far more tightly.")
+```{r box-helper, include=FALSE}
+box_metric <- function(var, title, cap) {
+  per |>
+    filter(model != "nojitter-v1", !(model == "adamiak-v2" & window %in% c(24, 32))) |>
+    mutate(w = factor(paste0(window, "px"), levels = paste0(c(64, 48, 32, 24), "px"))) |>
+    ggplot(aes(w, .data[[var]], colour = model, fill = model)) +
+    geom_boxplot(alpha = 0.16, width = 0.55, outlier.shape = NA, linewidth = 0.6,
+                 position = position_dodge(width = 0.7)) +
+    geom_point(position = position_jitterdodge(jitter.width = 0.12, dodge.width = 0.7),
+               alpha = 0.7, size = 2) +
+    scale_colour_manual(values = PAL) + scale_fill_manual(values = PAL) +
+    scale_y_continuous(limits = c(0, 1), labels = percent_format(accuracy = 1)) +
+    labs(title = title, subtitle = "Each point is one of the ten scenes; boxes show the middle half.",
+         x = NULL, y = NULL, caption = cap)
+}
+```
+
+```{r fig-box-prec, fig.height=4.4}
+box_metric("P", "Per-scene precision",
+  "adamiak-v2 is the more precise model at every working window, and its spread is wider at both ends.")
+```
+
+Precision separates the two clearly. `adamiak-v2` runs higher at both working windows, but its
+per-scene values are scattered across a much wider range, so the average conceals scenes where it is
+considerably worse than the headline suggests.
+
+```{r fig-box-recall, fig.height=4.4}
+box_metric("R", "Per-scene recall",
+  "Both models vary widely in recall between scenes; this is where the sparse corridors show up.")
+```
+
+Recall is where both models are least consistent. The low outliers are the sparse scenes, where a
+handful of vehicles spread across a large area means a few misses move the number a long way. That
+spread is the single largest contributor to the variance in the F1 panel below.
+
+```{r fig-box-f1, fig.height=4.4}
+box_metric("F1", "Per-scene F1",
+  "The failed adamiak-v2 configurations are omitted. warmup-v1's results cluster far more tightly.")
 ```
 
 ```{r spread-table}
@@ -260,6 +311,54 @@ One qualification. These figures are the raw detection ceiling, measured with no
 threshold, so they describe what the model reaches rather than what a deployed configuration reports.
 The gate does select on keypoint confidence, and keypoint confidence rises with echo area, so the
 deployed pipeline is if anything biased toward large echoes.
+
+# Which models can use the window at all
+
+Before ranking models across window sizes it is worth checking which ones function at each size. Every
+model in the registry was given 60 chips, each centred on a real labelled vehicle across a dense and a
+mid-density scene, at all four windows. The measure is simply whether the model returns any detection
+above 0.3 on a chip that definitely contains a vehicle.
+
+```{r robust, fig.height=4.8}
+rb <- read_csv("data/window_robustness.csv", show_col_types = FALSE)
+rb |>
+  mutate(model = fct_reorder(model, hits, .fun = sum),
+         w = factor(paste0(window, "px"), levels = paste0(c(64, 48, 32, 24), "px"))) |>
+  ggplot(aes(w, model, fill = hits / n)) +
+  geom_tile(colour = "white", linewidth = 1.2) +
+  geom_text(aes(label = hits), size = 3.2,
+            colour = ifelse(rb$hits[order(rb$model, rb$window)] > 35, "white", "grey20")) +
+  scale_fill_gradient(low = "#f7f2ea", high = "#2a78d6", labels = percent_format(),
+                      limits = c(0, 1), name = NULL) +
+  labs(title = "Detections on 60 chips centred on real vehicles",
+       subtitle = "A model that cannot fire on a centred vehicle cannot be evaluated at that window.",
+       x = "window size", y = NULL,
+       caption = "Only jitter-mv, warmup-v1 and nojitter-v1 hold up across the full range.")
+```
+
+```{r robust-table}
+read_csv("data/window_robustness.csv", show_col_types = FALSE) |>
+  mutate(pct = paste0(round(100 * hits / n), "%")) |>
+  select(model, window, pct) |>
+  pivot_wider(names_from = window, values_from = pct) |>
+  rename(Model = model, `64px` = `64`, `48px` = `48`, `32px` = `32`, `24px` = `24`)
+```
+
+Three models hold up across the whole range: `jitter-mv`, `warmup-v1` and `nojitter-v1`. Every other
+model degrades or fails outright below 48 pixels. `adamiak-v2` goes from 58 of 60 at its native window
+to 0 of 60 at 32 pixels, and `adamiak-all` collapses one step earlier, from 53 to 6 at 48 pixels.
+
+The three that survive share one property, and it is not the one I expected. They are not the three
+largest training sets: `jitter-mv` was trained on 411 chips and holds up, while `adamiak-all` was
+trained on 538 and does not. What the three have in common is that they were all trained from the
+**padded 96-pixel export**, the one that carries multi-vehicle targets. In those chips a neighbouring
+vehicle can appear anywhere in the frame rather than dead centre, so the model sees vehicles at
+off-centre positions during training even when translation jitter is switched off. That appears to be
+what makes a model tolerate a change of input size.
+
+The practical consequence is that a ranking across window sizes is only meaningful for those three.
+For the rest, the window is not a parameter to tune but a setting they were built for, and comparing
+them at 32 or 24 pixels measures a failure mode rather than a preference.
 
 # Exact configuration
 

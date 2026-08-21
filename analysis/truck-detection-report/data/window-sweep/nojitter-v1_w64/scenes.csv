@@ -3,3 +3,8 @@ Tacoma-Centralia_01_20260429,Centralia/I-5-south,held-out:temporal,2026-04-29,EP
 Tacoma-Centralia_02_20260602,Centralia/I-5-south,trained,2026-06-02,EPSG:32610,3493,7396,4.548,588,89
 Centralia_01_20260511,Centralia/I-5-south,trained,2026-05-11,EPSG:32610,1596,5393,2.2,290,56
 auburn-snoqualmie_03_20260614,auburn-snoqualmie/I-90,trained,2026-06-14,EPSG:32610,8562,7531,6.257,677,42
+Tri-Cities-New_01_20260611,Tri-Cities (arid),trained,2026-06-11,EPSG:32611,12295,8836,19.644,2604,105
+spokane-i90_01_20260622,Spokane (arid),trained,2026-06-22,EPSG:32611,10328,3959,20.149,2240,55
+blaine-bellingham_02_20260528,blaine-bellingham/I-5-north,trained,2026-05-28,EPSG:32610,7342,9609,11.149,1180,50
+Yakima-Toppenish_04_20260620,Yakima (arid),trained,2026-06-20,EPSG:32610,7296,6704,12.694,1353,43
+Yakima-Toppenish_02_20260509,Yakima (arid),trained,2026-05-09,EPSG:32610,7296,6704,12.668,1350,31

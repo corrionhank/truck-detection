@@ -1,6 +1,6 @@
 {
   "_comment": "Model registry / experiment log. Each entry records how a model was trained, its results, and findings. Weights live in weights/ (gitignored, large); this JSON (metadata + notes) is committed so past efforts are recoverable. 'active' = the model the Inference tab / backend runs by default. status: active | archived. Edit notes freely, or via the Models tab.",
-  "active": "kprcnn-adamiak-all",
+  "active": "kprcnn-adamiak-v2",
   "models": [
     {
       "id": "kprcnn-echo-v0",

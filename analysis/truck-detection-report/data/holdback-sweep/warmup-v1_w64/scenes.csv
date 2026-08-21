@@ -1,0 +1,4 @@
+scene,corridor,split,date,crs,width_px,height_px,valid_km2,windows,labelled_vehicles
+Yakima-Toppenish_03_20260614,Yakima (arid),trained,2026-06-14,EPSG:32610,7296,6704,12.691,1349,27
+Yakima-Toppenish_01_20260503,Yakima (arid),trained,2026-05-03,EPSG:32610,7296,6704,12.729,1348,25
+auburn-snoqualmie_01_20260425,auburn-snoqualmie/I-90,trained,2026-04-25,EPSG:32610,8561,7486,7.109,747,24

@@ -3,3 +3,8 @@
 [09:31:13] [2/10] Tacoma-Centralia_02_20260602 [trained] 2926 dets / 588 win / 143s — thr0.3: n=128 F1=0.5567 | thr0.5: n=114 F1=0.5757 | thr0.7: n=100 F1=0.5869
 [09:32:30] [3/10] Centralia_01_20260511 [trained] 1646 dets / 290 win / 77s — thr0.3: n=81 F1=0.4526 | thr0.5: n=74 F1=0.4615 | thr0.7: n=55 F1=0.4505
 [09:34:35] [4/10] auburn-snoqualmie_03_20260614 [trained] 1386 dets / 677 win / 124s — thr0.3: n=109 F1=0.4768 | thr0.5: n=84 F1=0.5714 | thr0.7: n=69 F1=0.6486
+[09:41:54] [5/10] Tri-Cities-New_01_20260611 [trained] 4050 dets / 2604 win / 438s — thr0.3: n=321 F1=0.3991 | thr0.5: n=252 F1=0.4538 | thr0.7: n=174 F1=0.509
+[09:48:28] [6/10] spokane-i90_01_20260622 [trained] 2907 dets / 2240 win / 395s — thr0.3: n=221 F1=0.2754 | thr0.5: n=134 F1=0.3915 | thr0.7: n=98 F1=0.4444
+[09:51:48] [7/10] blaine-bellingham_02_20260528 [trained] 1484 dets / 1180 win / 200s — thr0.3: n=167 F1=0.3318 | thr0.5: n=118 F1=0.4048 | thr0.7: n=94 F1=0.4583
+[09:55:34] [8/10] Yakima-Toppenish_04_20260620 [trained] 1992 dets / 1353 win / 226s — thr0.3: n=146 F1=0.3915 | thr0.5: n=105 F1=0.5 | thr0.7: n=80 F1=0.5366
+[09:59:27] [9/10] Yakima-Toppenish_02_20260509 [trained] 1957 dets / 1350 win / 232s — thr0.3: n=108 F1=0.3165 | thr0.5: n=61 F1=0.4783 | thr0.7: n=40 F1=0.5352
