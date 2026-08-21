@@ -261,6 +261,105 @@ threshold, so they describe what the model reaches rather than what a deployed c
 The gate does select on keypoint confidence, and keypoint confidence rises with echo area, so the
 deployed pipeline is if anything biased toward large echoes.
 
+# Exact configuration
+
+Every setting below is read from the `manifest.json` each collection run writes beside its
+`detections.csv`, so this is what the runs actually used rather than what they were meant to use.
+
+## The collection pass
+
+Each of the eight runs was one pass of `src/collect_inference.py` over the ten scenes. The command,
+with `$W` taking 64, 48, 32 and 24 in turn and `$M` each model id:
+
+```bash
+python3 src/collect_inference.py \
+    --model $M --chip $W \
+    --scenes "Tacoma-Centralia_01_20260429,Tacoma-Centralia_02_20260602,Centralia_01_20260511,\
+auburn-snoqualmie_03_20260614,Tri-Cities-New_01_20260611,spokane-i90_01_20260622,\
+blaine-bellingham_02_20260528,Yakima-Toppenish_04_20260620,Yakima-Toppenish_02_20260509,\
+blaine-bellingham_03_20260504" \
+    --thresholds 0.3,0.5,0.7 --threads 3 \
+    --out analysis/truck-detection-report/data/window-sweep/${M#kprcnn-}_w${W}
+```
+
+Runs were interleaved by window so that each window produced both models before moving on, and any run
+whose output already existed was skipped, making the sweep resumable.
+
+## Parameters, as recorded
+
+```{r manifest, echo=FALSE}
+mf <- list.files("data/window-sweep", pattern = "manifest.json", recursive = TRUE, full.names = TRUE)
+j  <- jsonlite::fromJSON(mf[grep("_w48", mf)[1]])
+tibble::tribble(
+  ~Parameter,                ~Value,                                    ~Meaning,
+  "chip_px",                 "64 / 48 / 32 / 24",                       "sliding-window size, the swept variable",
+  "stride",                  "40 / 30 / 20 / 15",                       "window step, held at 0.625 x window",
+  "min_size (model input)",  "192 / 144 / 96 / 72",                     "window resized to 3x before the backbone",
+  "min_valid",               as.character(j$min_valid),                 "window skipped unless this share of pixels carry data",
+  "roi_score_thresh",        as.character(j$roi_score_thresh),          "torchvision floor; the lowest score recorded",
+  "roi_nms_thresh",          as.character(j$roi_nms_thresh),            "overlap suppression inside each window",
+  "roi_detections_per_img",  as.character(j$roi_detections_per_img),    "cap per window",
+  "top1_only",               as.character(j$top1_only),                 "FALSE: every detection kept, not just the window's best",
+  "dedup_px",                paste0(j$dedup_px, " (", j$dedup_m, " m)"),"radius at collection; re-swept offline",
+  "match_px",                paste0(j$match_px, " (", j$match_m, " m)"),"red-keypoint distance for a correct detection",
+  "gsd_m",                   as.character(j$gsd_m),                     "ground sample distance",
+  "anchor_sizes",            paste(j$arch$anchor_sizes, collapse = "/"),"unchanged from training",
+  "aspect_ratios",           paste(j$arch$aspect_ratios, collapse = "/"),"unchanged from training"
+)
+```
+
+The two settings worth drawing out. `top1_only = FALSE` means every detection above the 0.05 floor was
+written to disk, not just the highest-scoring one per window, which is what makes the offline re-sweep
+possible. And the model input is always three times the window, which is why a vehicle occupies the
+same number of pixels in model space at 24 pixels as at 64 and the anchor set stays valid.
+
+## Choosing the operating point offline
+
+Because the raw records carry every detection with its keypoint score, the three post-processing
+controls were re-swept from disk with no further inference. For each model and window, every
+combination below was scored and the best F1 kept:
+
+```python
+GATES  = [None] + arange(floor(min_kp_score), ceil(max_kp_score) + 0.5, 0.5)  # per-model range
+THRS   = arange(0.05, 0.96, 0.05)                                            # 19 values
+DEDUPS = [8.0, 16.0, 32.0]                                                   # px, = 24/48/96 m
+```
+
+The gate range is derived from each model's own observed keypoint-score distribution rather than a
+fixed span, because the score is an uncalibrated logit whose scale differs between models. Capping it
+at a shared value is precisely the mistake that produced the earlier, wrong window comparison.
+
+## Scoring, in order
+
+```python
+def evaluate(detections, gate, dedup_px, threshold):
+    kept, used = [], set()
+    for d in sorted(detections, key=lambda d: -d.score):   # descending confidence
+        if gate is not None and d.kp_score_mean <= gate:   # 1. keypoint-confidence gate
+            continue
+        if d.score < threshold:                            # 2. box-score threshold
+            continue
+        if any(dist(d.red, k.red) < dedup_px for k in kept):  # 3. duplicate suppression
+            continue
+        kept.append(d)
+        near = nearest_unclaimed_label(d.red, within=6px)  # 4. greedy consuming match
+        if near is not None:
+            used.add(near); d.is_tp = True
+    TP = len(used); FP = len(kept) - TP; FN = n_labelled - TP
+    return TP / (TP + FP), TP / (TP + FN)                  # precision, recall
+```
+
+Matching is greedy rather than optimal: detections are taken in descending confidence, each credited to
+its nearest still-unclaimed label within 18 metres, and that label is then removed from the pool. True
+positives are counted over labels, so a second detection on an already-claimed label is a false
+positive. False negatives are labels nothing reached.
+
+Two consequences worth noting. Matching uses the red keypoint distance rather than box overlap, because
+at three metres per pixel a vehicle spans only a few pixels and box overlap is dominated by rounding, so
+none of these figures are comparable to published mAP. And because the duplicate radius was swept down
+to 8 pixels, below twice the 18 metre match radius, the one-to-one guarantee that a wider radius
+provides no longer holds automatically; the consuming step above is what enforces it.
+
 # Limitations
 
 The strongest configuration in this report reaches F1 0.704 with a count ratio of 0.97, but that
