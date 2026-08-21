@@ -331,9 +331,10 @@ function DatasetView({ totalScenes }: { totalScenes: number }) {
           ))}
         </div>
         <p className="hint" style={{ marginTop: 12 }}>
-          Coverage is volume-rich but concentrated — the next labeling is worth more on new corridors
-          (Bellingham, Stanwood, Seattle, more I-90) than on more Centralia. Each vehicle = 3 keypoints
-          (blue → red → green).
+          Coverage is volume-rich but concentrated: the next labelling is worth more on new corridors
+          (Bellingham, Stanwood, Seattle, more I-90) than on more Centralia. Density is vehicles per km²
+          of imaged ground, not raster size — these clips are 88–99% black margin. Each vehicle is
+          3 keypoints (blue → red → green), so a keypoint count is always 3× the vehicle count.
         </p>
       </div>
     </>
