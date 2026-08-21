@@ -1,0 +1,11 @@
+scene,corridor,split,date,crs,width_px,height_px,valid_km2,windows,labelled_vehicles
+Tacoma-Centralia_01_20260429,Centralia/I-5-south,held-out:unspecified,2026-04-29,EPSG:32610,3888,7410,4.44,2943,80
+Tacoma-Centralia_02_20260602,Centralia/I-5-south,trained,2026-06-02,EPSG:32610,3493,7396,4.548,3010,89
+Centralia_01_20260511,Centralia/I-5-south,trained,2026-05-11,EPSG:32610,1596,5393,2.2,1462,56
+auburn-snoqualmie_03_20260614,auburn-snoqualmie/I-90,unseen,2026-06-14,EPSG:32610,8562,7531,6.257,3754,42
+Tri-Cities-New_01_20260611,Tri-Cities (arid),unseen,2026-06-11,EPSG:32611,12295,8836,19.644,13134,105
+spokane-i90_01_20260622,Spokane (arid),unseen,2026-06-22,EPSG:32611,10328,3959,20.149,12486,55
+blaine-bellingham_02_20260528,blaine-bellingham/I-5-north,unseen,2026-05-28,EPSG:32610,7342,9609,11.149,6668,50
+Yakima-Toppenish_04_20260620,Yakima (arid),unseen,2026-06-20,EPSG:32610,7296,6704,12.694,7574,43
+Yakima-Toppenish_02_20260509,Yakima (arid),unseen,2026-05-09,EPSG:32610,7296,6704,12.668,7553,31
+blaine-bellingham_03_20260504,blaine-bellingham/I-5-north,unseen,2026-05-04,EPSG:32610,6005,8891,11.616,6947,29

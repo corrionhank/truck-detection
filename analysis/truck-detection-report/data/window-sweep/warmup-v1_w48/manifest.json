@@ -1,0 +1,45 @@
+{
+  "model_id": "kprcnn-warmup-v1",
+  "weights": "kprcnn-warmup-v1.pt",
+  "arch": {
+    "backbone": "resnet50-fpn",
+    "anchors": "custom",
+    "anchor_sizes": [
+      4,
+      8,
+      16,
+      32,
+      48
+    ],
+    "aspect_ratios": [
+      0.25,
+      0.5,
+      0.75,
+      1.0,
+      1.25
+    ],
+    "classes": 2,
+    "keypoints": 3,
+    "min_size": 192,
+    "max_size": 320
+  },
+  "thresholds": [
+    0.3,
+    0.5,
+    0.7
+  ],
+  "stride": 30,
+  "chip_px": 48,
+  "match_px": 6.0,
+  "match_m": 18.0,
+  "dedup_px": 32.0,
+  "dedup_m": 96.0,
+  "min_valid": 0.15,
+  "gsd_m": 3.0,
+  "top1_only": false,
+  "roi_score_thresh": 0.05,
+  "roi_nms_thresh": 0.5,
+  "roi_detections_per_img": 100,
+  "n_scenes": 10,
+  "generated": "2026-08-21T05:26:56"
+}

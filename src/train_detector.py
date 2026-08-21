@@ -172,6 +172,11 @@ def to_target(kps):
                 "labels": torch.zeros((0,), dtype=torch.int64),
                 "keypoints": torch.zeros((0, 3, 3), dtype=torch.float32)}
     kps = kps.copy()
+    # Visibility BEFORE any clamping: torchvision masks the keypoint loss by (valid_loc & vis>0)
+    # while the box still counts as a positive instance, which is exactly the partial-object
+    # case. Clamping coordinates first would pin an off-frame keypoint to the chip edge and
+    # train the model to predict it there.
+    vis = (((kps >= 0) & (kps < CHIP)).all(axis=2)).astype(np.float32) * 2.0
     kps[:, :, 0] = np.clip(kps[:, :, 0], 1, CHIP - 2)
     kps[:, :, 1] = np.clip(kps[:, :, 1], 1, CHIP - 2)
     boxes = []
@@ -181,7 +186,7 @@ def to_target(kps):
         x1, y1 = min(float(CHIP), k[:, 0].max() + pad), min(float(CHIP), k[:, 1].max() + pad)
         w, h = max(x1 - x0, 4.0), max(y1 - y0, 4.0)
         boxes.append([x0, y0, x0 + w, y0 + h])
-    kpts = np.concatenate([kps, np.full((len(kps), 3, 1), 2.0, np.float32)], axis=2)  # v=2 visible
+    kpts = np.concatenate([kps, vis[:, :, None]], axis=2)   # v=2 visible, v=0 off-frame
     return {
         "boxes": torch.tensor(boxes, dtype=torch.float32),
         "labels": torch.ones(len(kps), dtype=torch.int64),   # class 1 = moving_echo
@@ -250,7 +255,11 @@ class ChipDS(torch.utils.data.Dataset):
             ox = oy = margin                                 # deterministic center crop (val / legacy)
         crop = chip[oy:oy + CHIP, ox:ox + CHIP]
         kps2 = kps2 - np.array([ox, oy], np.float32)
-        keep = [v for v in kps2 if (v >= 0).all() and (v < CHIP).all()]   # vehicles surviving the crop
+        # ANY keypoint in frame, not all three. The all() rule dropped a vehicle straddling the
+        # crop edge from the target entirely, which in detection training means it was taught as
+        # background: 18-26% of neighbour annotations depending on the jitter offset, and it
+        # flipped epoch to epoch as the offset was redrawn. See docs/MULTI_VEHICLE_TARGETS.md.
+        keep = [v for v in kps2 if (((v >= 0) & (v < CHIP)).all(axis=1)).any()]
         if not keep:                                         # safety: center always kept
             keep = [np.clip(kps2[0], 0.5, CHIP - 1.5)]
         img = torch.from_numpy(np.ascontiguousarray(crop)).permute(2, 0, 1).float() / 255.0

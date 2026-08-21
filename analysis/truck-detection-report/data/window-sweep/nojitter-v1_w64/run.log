@@ -1,0 +1,5 @@
+[09:26:38] model=kprcnn-nojitter-v1 scenes=10 thresholds=[0.3, 0.5, 0.7] threads=6 top1_only=False match=6.0px(18m)
+[09:28:51] [1/10] Tacoma-Centralia_01_20260429 [held-out:temporal] 2103 dets / 574 win / 132s — thr0.3: n=120 F1=0.47 | thr0.5: n=104 F1=0.5109 | thr0.7: n=84 F1=0.5488
+[09:31:13] [2/10] Tacoma-Centralia_02_20260602 [trained] 2926 dets / 588 win / 143s — thr0.3: n=128 F1=0.5567 | thr0.5: n=114 F1=0.5757 | thr0.7: n=100 F1=0.5869
+[09:32:30] [3/10] Centralia_01_20260511 [trained] 1646 dets / 290 win / 77s — thr0.3: n=81 F1=0.4526 | thr0.5: n=74 F1=0.4615 | thr0.7: n=55 F1=0.4505
+[09:34:35] [4/10] auburn-snoqualmie_03_20260614 [trained] 1386 dets / 677 win / 124s — thr0.3: n=109 F1=0.4768 | thr0.5: n=84 F1=0.5714 | thr0.7: n=69 F1=0.6486

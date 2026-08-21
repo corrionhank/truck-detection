@@ -37,7 +37,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
-GSD, CHIP = 3.0, 64
+GSD, CHIP = 3.0, 64      # CHIP is a default; main() rebinds it from --chip
 
 
 def corridor_of(s):
@@ -80,11 +80,16 @@ def geometry(kp):
 
 
 def main():
+    global CHIP
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default=None, help="registry model id (default: newest registry entry)")
     ap.add_argument("--thresholds", default="0.3,0.5,0.85")
     ap.add_argument("--scenes", default=None, help="comma-separated subset (default: every scene on disk)")
-    ap.add_argument("--stride", type=int, default=40)
+    ap.add_argument("--chip", type=int, default=CHIP,
+                    help="sliding-window size in px. The model input is resized to chip*3 so an "
+                         "echo keeps the scale the weights were trained at; only context changes")
+    ap.add_argument("--stride", type=int, default=None,
+                    help="window step (default: 0.625 * chip, i.e. 40 for a 64 px chip)")
     ap.add_argument("--match-px", dest="match_px", type=float, default=6.0, help="GT match radius (6 px = 18 m)")
     ap.add_argument("--dedup-px", dest="dedup_px", type=float, default=32.0)
     ap.add_argument("--min-valid", dest="min_valid", type=float, default=0.15)
@@ -258,6 +263,17 @@ def main():
             if all(np.linalg.norm(red - np.array([k["kp_red_x"], k["kp_red_y"]])) > a.dedup_px for k in kept):
                 kept.append(r)
         return kept
+
+    CHIP = int(a.chip)
+    if not a.stride:
+        a.stride = max(1, round(CHIP * 0.625))
+    if a.stride >= CHIP:
+        print(f"  stride {a.stride} >= window {CHIP}: gaps between windows -> clamping", flush=True)
+        a.stride = CHIP - 1
+    # hold the 3x upscale so anchors stay valid at any window size
+    model.transform.min_size = (CHIP * 3,)
+    model.transform.max_size = int(CHIP * 5)
+    print(f"  window {CHIP}px stride {a.stride} -> model input {CHIP*3}px", flush=True)
 
     thresholds = [float(t) for t in a.thresholds.split(",") if t.strip()]
     scenes = ([s.strip() for s in a.scenes.split(",")] if a.scenes

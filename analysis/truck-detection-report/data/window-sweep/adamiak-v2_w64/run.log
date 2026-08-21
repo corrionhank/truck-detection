@@ -1,0 +1,12 @@
+[03:10:31] model=kprcnn-adamiak-v2 scenes=10 thresholds=[0.3, 0.5, 0.7] threads=3 top1_only=False match=6.0px(18m)
+[03:13:53] [1/10] Tacoma-Centralia_01_20260429 [held-out:unspecified] 732 dets / 574 win / 201s — thr0.3: n=86 F1=0.5422 | thr0.5: n=64 F1=0.5694 | thr0.7: n=44 F1=0.5323
+[03:17:00] [2/10] Tacoma-Centralia_02_20260602 [trained] 918 dets / 588 win / 187s — thr0.3: n=105 F1=0.6186 | thr0.5: n=85 F1=0.6667 | thr0.7: n=63 F1=0.6184
+[03:18:45] [3/10] Centralia_01_20260511 [trained] 577 dets / 290 win / 105s — thr0.3: n=70 F1=0.5784 | thr0.5: n=58 F1=0.605 | thr0.7: n=38 F1=0.5657
+[03:21:32] [4/10] auburn-snoqualmie_03_20260614 [unseen] 403 dets / 677 win / 167s — thr0.3: n=57 F1=0.6061 | thr0.5: n=43 F1=0.6353 | thr0.7: n=30 F1=0.6111
+[03:31:31] [5/10] Tri-Cities-New_01_20260611 [unseen] 894 dets / 2604 win / 599s — thr0.3: n=116 F1=0.5882 | thr0.5: n=75 F1=0.6222 | thr0.7: n=49 F1=0.4935
+[03:40:11] [6/10] spokane-i90_01_20260622 [unseen] 709 dets / 2240 win / 520s — thr0.3: n=54 F1=0.2752 | thr0.5: n=23 F1=0.2564 | thr0.7: n=9 F1=0.25
+[03:44:52] [7/10] blaine-bellingham_02_20260528 [unseen] 281 dets / 1180 win / 281s — thr0.3: n=33 F1=0.3855 | thr0.5: n=15 F1=0.2462 | thr0.7: n=7 F1=0.1053
+[03:51:04] [8/10] Yakima-Toppenish_04_20260620 [unseen] 1941 dets / 1353 win / 372s — thr0.3: n=95 F1=0.2899 | thr0.5: n=43 F1=0.3953 | thr0.7: n=20 F1=0.3492
+[03:57:04] [9/10] Yakima-Toppenish_02_20260509 [unseen] 2162 dets / 1350 win / 360s — thr0.3: n=95 F1=0.1111 | thr0.5: n=36 F1=0.1791 | thr0.7: n=11 F1=0.1905
+[04:00:41] [10/10] blaine-bellingham_03_20260504 [unseen] 371 dets / 1234 win / 218s — thr0.3: n=41 F1=0.4286 | thr0.5: n=27 F1=0.3929 | thr0.7: n=14 F1=0.3721
+[04:00:41] DONE -> analysis/truck-detection-report/data/window-sweep/adamiak-v2_w64/detections.csv  analysis/truck-detection-report/data/window-sweep/adamiak-v2_w64/stats.csv  analysis/truck-detection-report/data/window-sweep/adamiak-v2_w64/scenes.csv
