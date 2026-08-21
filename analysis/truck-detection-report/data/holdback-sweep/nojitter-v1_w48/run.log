@@ -1,2 +1,5 @@
 [10:52:45] model=kprcnn-nojitter-v1 scenes=3 thresholds=[0.3, 0.5, 0.7] threads=6 top1_only=False match=6.0px(18m)
 [10:57:19] [1/3] Yakima-Toppenish_03_20260614 [trained] 2060 dets / 2199 win / 275s — thr0.3: n=139 F1=0.2892 | thr0.5: n=98 F1=0.384 | thr0.7: n=74 F1=0.4356
+[11:02:18] [2/3] Yakima-Toppenish_01_20260503 [trained] 2275 dets / 2200 win / 298s — thr0.3: n=162 F1=0.2032 | thr0.5: n=129 F1=0.2338 | thr0.7: n=84 F1=0.3119
+[11:05:18] [3/3] auburn-snoqualmie_01_20260425 [trained] 1063 dets / 1212 win / 180s — thr0.3: n=87 F1=0.4144 | thr0.5: n=60 F1=0.5476 | thr0.7: n=40 F1=0.625
+[11:05:18] DONE -> analysis/truck-detection-report/data/holdback-sweep/nojitter-v1_w48/detections.csv  analysis/truck-detection-report/data/holdback-sweep/nojitter-v1_w48/stats.csv  analysis/truck-detection-report/data/holdback-sweep/nojitter-v1_w48/scenes.csv

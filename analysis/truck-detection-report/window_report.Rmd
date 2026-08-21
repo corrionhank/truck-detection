@@ -60,8 +60,8 @@ per <- per |> mutate(works = !(model == "adamiak-v2" & window %in% c(24, 32)))
 ::: lede
 **`adamiak-v2` at 64 px is the best configuration measured: F1 0.704 at a count ratio of 0.97.** Window
 size makes almost no difference once the operating point is re-tuned for it, a spread of 0.014 across
-64 down to 24 px. What matters more is that **only three of eleven models can change window at all**
-without failing outright. `adamiak-v2` scores higher than `warmup-v1` at every working window, but
+64 down to 24 px. What matters more is that **only three of eleven models keep their confidence**
+below 48 px; the rest lose most of their recall. `adamiak-v2` scores higher than `warmup-v1` at every working window, but
 `warmup-v1`'s per-scene variance is two and a half times tighter, which for a counting programme is the
 more useful property. Traffic density predicts performance more strongly than either.
 :::
@@ -89,8 +89,10 @@ the same model and operating point scored 0.690, so it is not an artefact of thi
 overall, 528 for 349 true positives against `adamiak-v2`'s 560 for 401. The gap between them is not in
 finding vehicles but in separating good detections from bad ones.
 
-The `adamiak-v2` rows at 32 and 24 px are a model failure rather than a window effect, explained in
-section 3.
+The `adamiak-v2` rows at 32 and 24 px are not a window preference. The model still detects there, but
+its confidence collapses: 179 detections across the ten scenes at 32 px against 8,988 at 64 px, with
+only 37 clearing a score of 0.3. Recall falls from 0.691 to 0.228 while precision rises to 0.776,
+because the few responses that survive are the strongest ones. Section 3 shows how widely this applies.
 
 # Window size makes almost no difference
 
@@ -117,7 +119,7 @@ ggplot(pr, aes(w, value, colour = model, group = model)) +
   labs(title = "Precision, recall and F1 by window size",
        subtitle = "Common 0-100% axis across all three panels. Each point at its own best operating point.",
        x = NULL, y = NULL,
-       caption = "Crosses on a dashed segment are configurations where the model does not run; they are not a trend.")
+       caption = "Crosses on a dashed segment mark configurations whose confidence has collapsed; the dip is a scoring effect, not a window preference.")
 ```
 
 ```{r fig-ratio, fig.height=3.6, fig.width=7}
@@ -152,11 +154,15 @@ gate held at a value tuned for 64 px, a 24 px window appeared to lift recall fro
 Re-tuning the gate per window absorbs nearly all of that. The window was compensating for a mis-set
 gate rather than contributing anything itself.
 
-# Most models cannot change window at all
+# Confidence collapses for most models below 48 px
 
 Before treating window size as a tunable parameter it is worth checking which models tolerate it. Every
 registered model was given 60 chips, each centred on a real labelled vehicle, at all four windows. The
-measure is whether it returns any detection above 0.3 on a chip that definitely contains a vehicle.
+measure is whether it returns a detection **above score 0.3** on a chip that definitely contains one.
+
+This is a confidence test, not a liveness test. A model scoring zero here still emits detections; they
+simply fall below 0.3. `adamiak-v2` scores 0 of 60 at 32 px yet still recovers 114 of 580 vehicles over
+a full sliding-window pass that records everything down to 0.05.
 
 ```{r robust, fig.height=4.8}
 rb |>
@@ -174,9 +180,12 @@ rb |>
        caption = "Only jitter-mv, warmup-v1 and nojitter-v1 hold up across the full range.")
 ```
 
-Three models hold up across the range: `jitter-mv`, `warmup-v1` and `nojitter-v1`. Every other model
-degrades or fails outright below 48 px. `adamiak-v2` goes from 58 of 60 at its native window to 0 of 60
-at 32 px. `adamiak-all` collapses a step earlier, 53 to 6 at 48 px.
+Three models hold their confidence across the range: `jitter-mv`, `warmup-v1` and `nojitter-v1`. Every
+other model degrades sharply below 48 px. `adamiak-v2` goes from 58 of 60 at its native window to 0 of
+60 at 32 px, and `adamiak-all` collapses a step earlier, 53 to 6 at 48 px.
+
+The consequence is lost recall rather than silence. `adamiak-v2` still reaches F1 0.353 at 32 px and
+0.537 at 24 px, against 0.704 at 64. It detects; it is simply not a configuration anyone would choose.
 
 The three that survive are not the three largest training sets, which rules out data volume as the
 explanation: `jitter-mv` holds up on 411 chips while `adamiak-all` fails on 538. What they share is
@@ -185,9 +194,8 @@ In those chips a neighbouring vehicle can sit anywhere in the frame, so the mode
 vehicles during training even when translation jitter is switched off. That appears to be what lets a
 model tolerate a change of input size.
 
-The practical consequence is that window size is a parameter only for those three. For the rest it is a
-fixed property of how they were built, and evaluating them at 32 or 24 px measures a failure mode
-rather than a preference.
+So window size is a genuinely free parameter only for those three. For the rest, moving away from the
+size they were built for costs most of the recall, and the window is effectively fixed by training.
 
 # Consistency between scenes
 
@@ -207,7 +215,7 @@ box_metric <- function(var, title, cap) {
                  position = position_dodge(width = 0.7)) +
     geom_point(position = position_jitterdodge(jitter.width = 0.12, dodge.width = 0.7),
                alpha = 0.75, size = 1.9) +
-    geom_text(data = fail, aes(x = x, y = y, label = "model does not run"),
+    geom_text(data = fail, aes(x = x, y = y, label = "confidence collapsed"),
               inherit.aes = FALSE, size = 2.7, colour = "#2a78d6", fontface = "italic") +
     scale_colour_manual(values = PAL) + scale_fill_manual(values = PAL) +
     scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.25),
@@ -219,7 +227,7 @@ box_metric <- function(var, title, cap) {
 
 ```{r fig-box-f1, fig.height=4.3}
 box_metric("F1", "Per-scene F1",
-  "warmup-v1 clusters far more tightly at every window. The two adamiak-v2 configurations that do not run are labelled; their spread is a failure to fire, not a consistency measurement.")
+  "warmup-v1 clusters far more tightly at every window. The two labelled adamiak-v2 configurations still detect, but at heavily reduced confidence, so their spread reflects that rather than scene-to-scene consistency.")
 ```
 
 ```{r spread-table}
@@ -279,8 +287,8 @@ The count ratio moves the same way. Both models over-report where traffic is hea
 where it is sparse, so a single global calibration factor would be wrong at both ends. Fitting the
 correction per density band is the obvious next step and needs no retraining.
 
-Rows marked `*` are the two `adamiak-v2` configurations where the model does not run; their numbers are
-a failure to fire rather than a property of the band.
+Rows marked `*` are the two `adamiak-v2` configurations whose confidence has collapsed; their numbers
+reflect that rather than a property of the density band.
 
 # A smaller window does not lose the larger echoes
 
@@ -337,6 +345,56 @@ vehicles per square kilometre down to 2.45. Area is imaged ground rather than ra
 these corridor clips is a large distinction: the stored rasters are mostly empty margin.
 `Tacoma-Centralia_01` was withheld from every model's training set, so it is the only scene here where
 no model has an advantage.
+
+# Data sources and decisions
+
+Every input, and every choice made in producing these numbers.
+
+## Inputs
+
+| Source | What it provides | Used for |
+|---|---|---|
+| `data/active/imagery/*.tif` | 24 PlanetScope SuperDove GeoTIFFs, 8-band, 3 m, native UTM | all inference |
+| `data/active/Annotations-RGB.gpkg`, layer `Annotations` | 789 hand-labelled vehicles, 3 keypoints each, EPSG:32610 | ground truth |
+| `models/registry.json` + `weights/*.pt` | 11 registered models, each with its own anchor set and input size | the models compared |
+| `data/window-sweep/*/detections.csv` | every detection from each run, 44 fields including keypoint scores | all tables and charts |
+| `data/window_robustness.csv` | the 60-chip confidence probe | section 3 |
+
+## The 60 chips in the confidence probe
+
+Thirty vehicles each from `Tacoma-Centralia_01_20260429` and `Yakima-Toppenish_04_20260620`, taken in
+GeoPackage order rather than sampled randomly. Each chip is cut from the same percentile-stretched RGB
+the detector uses, centred on that vehicle's red keypoint, and clamped to the raster edge.
+
+Two scenes, chosen to span the density range at 18.0 and 3.4 vehicles per square kilometre. Sixty chips
+is enough to separate "fires reliably" from "does not", which is all the probe is for. It is not a
+performance measurement, and no accuracy figure in this report comes from it.
+
+The probe is deliberately easy. A centred vehicle is the best case, so a model that struggles here has
+no prospect of doing better on a sliding grid where vehicles land wherever they land.
+
+## Decisions
+
+**Ten scenes, not all 21.** At least 29 labelled vehicles each so per-scene statistics are stable, and
+spanning the density range across six corridors. 580 of 789 vehicles.
+
+**Operating point re-swept per model and window.** Carrying one model's gate to another, or one
+window's to another, is what produced an earlier and incorrect comparison.
+
+**Gate range derived per model** from its own keypoint-score distribution, because the score is an
+uncalibrated logit whose scale differs between models.
+
+**Every detection recorded at the 0.05 floor** with `top1_only=FALSE`, which is what makes the offline
+re-sweep possible without re-running inference.
+
+**Model input held at three times the window**, so a vehicle occupies the same pixels in model space at
+every window and the anchor set stays valid. Only context changes.
+
+**Greedy consuming matching**, red keypoint within 18 m, true positives counted over labels.
+
+**Failed configurations shown, not dropped**, marked in the charts and asterisked in the tables.
+
+**`nojitter-v1` excluded** because its collection was still running.
 
 # Exact configuration
 

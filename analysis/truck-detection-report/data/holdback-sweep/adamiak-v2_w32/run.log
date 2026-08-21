@@ -1,0 +1,1 @@
+[11:05:21] model=kprcnn-adamiak-v2 scenes=3 thresholds=[0.3, 0.5, 0.7] threads=6 top1_only=False match=6.0px(18m)
