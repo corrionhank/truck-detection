@@ -1,3 +1,5 @@
 [10:43:46] model=kprcnn-warmup-v1 scenes=3 thresholds=[0.3, 0.5, 0.7] threads=6 top1_only=False match=6.0px(18m)
 [10:47:08] [1/3] Yakima-Toppenish_03_20260614 [trained] 1311 dets / 2199 win / 202s — thr0.3: n=158 F1=0.2378 | thr0.5: n=107 F1=0.2836 | thr0.7: n=70 F1=0.3299
 [10:50:38] [2/3] Yakima-Toppenish_01_20260503 [trained] 1445 dets / 2200 win / 210s — thr0.3: n=175 F1=0.18 | thr0.5: n=118 F1=0.1958 | thr0.7: n=80 F1=0.2476
+[10:52:41] [3/3] auburn-snoqualmie_01_20260425 [trained] 887 dets / 1212 win / 123s — thr0.3: n=112 F1=0.25 | thr0.5: n=74 F1=0.3265 | thr0.7: n=41 F1=0.4
+[10:52:41] DONE -> analysis/truck-detection-report/data/holdback-sweep/warmup-v1_w48/detections.csv  analysis/truck-detection-report/data/holdback-sweep/warmup-v1_w48/stats.csv  analysis/truck-detection-report/data/holdback-sweep/warmup-v1_w48/scenes.csv

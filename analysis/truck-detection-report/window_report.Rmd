@@ -1,6 +1,6 @@
 ---
 title: "Window-size sweep"
-subtitle: "Two detectors across four sliding-window sizes, ten scenes, operating point re-tuned for every combination"
+subtitle: "Two detectors, four sliding-window sizes, ten scenes, operating point re-tuned for every combination"
 date: "`r format(Sys.Date(), '%B %d, %Y')`"
 output:
   html_document:
@@ -12,18 +12,20 @@ output:
     theme: flatly
     df_print: kable
     fig_width: 10
-    fig_height: 5.5
+    fig_height: 5
     code_folding: hide
 ---
 
 ```{css, echo=FALSE, eval=knitr::is_html_output()}
 .main-container { max-width: 1180px; }
-table { width: 100%; margin: 1.3em 0 1.7em 0; font-size: 0.92em; border-collapse: collapse; }
+table { width: 100%; margin: 1.2em 0 1.6em 0; font-size: 0.92em; border-collapse: collapse; }
 table th, table td { padding: 7px 14px !important; white-space: nowrap; text-align: right; }
 table th:first-child, table td:first-child,
 table th:nth-child(2), table td:nth-child(2) { text-align: left; }
 table th { border-bottom: 2px solid #d5dbe0; font-weight: 600; color: #2c3e50; }
 table tbody tr:nth-child(even) { background: #f7f9fa; }
+.lede { font-size: 1.05em; line-height: 1.62; border-left: 3px solid #dda032;
+        padding: 4px 0 4px 16px; margin: 16px 0 28px; }
 ```
 
 ```{r setup, include=FALSE}
@@ -44,146 +46,122 @@ res    <- read_csv("data/window_results.csv", show_col_types = FALSE)
 per    <- read_csv("data/window_per_scene.csv", show_col_types = FALSE)
 gtarea <- read_csv("data/window_gt_area_recall.csv", show_col_types = FALSE)
 scenes <- read_csv("data/scenes.csv", show_col_types = FALSE)
+rb     <- read_csv("data/window_robustness.csv", show_col_types = FALSE)
 
-# nojitter-v1's collection was still running when this was generated; it is reported
-# separately rather than mixed into comparisons it cannot yet support.
+# nojitter-v1's collection was still running when this was generated, so it is left out
+# rather than compared on partial data.
 COMPLETE <- res |> filter(model != "nojitter-v1")
 USED <- unique(per$scene)
-
-# Configurations where the model does not actually run (see the robustness section) are
-# kept in every table and chart, but flagged, so nothing is dropped without saying so.
-FAILED <- function(d) d$model == "adamiak-v2" & d$window %in% c(24, 32)
-per <- per |> mutate(works = !FAILED(per))
+# Configurations where the model does not actually run are kept everywhere but flagged,
+# so nothing is dropped without saying so.
+per <- per |> mutate(works = !(model == "adamiak-v2" & window %in% c(24, 32)))
 ```
 
-# What was run
-
-Two trained detectors were run across four sliding-window sizes on the same ten labelled scenes.
-Every combination was collected independently, recording every detection the model produced above the
-0.05 region floor with no filtering applied, so the operating point could be chosen afterwards from
-the stored records rather than carried over from a configuration tuned elsewhere.
-
-That last detail matters more than it sounds. A detector has three post-processing controls: a
-keypoint-confidence gate, a box-score threshold, and a duplicate-suppression radius. All three were
-re-swept for every model and window combination, and each row below reports that combination at its
-own best setting. An earlier version of this comparison held the gate fixed at a value tuned for the
-64-pixel window and applied it to the others, which handicapped them and produced a much larger
-apparent window effect than is real.
-
-Window size is a runtime parameter, not a property of the weights. Every window is resized to three
-times its own size before the network sees it, so a vehicle occupies the same number of pixels in
-model space at any window and the anchor set stays valid. What changes is how much surrounding ground
-comes with it.
-
-# The ten scenes
-
-Scenes were chosen for at least 29 labelled vehicles each, so per-scene statistics are stable, and to
-span the full range of traffic density across six corridors. The same ten were used for every model
-and every window, so all comparisons are like for like.
-
-```{r scenes}
-scenes |>
-  filter(scene %in% USED) |>
-  transmute(Scene = scene, Corridor = corridor, Vehicles = labelled_vehicles,
-            `Area (km²)` = round(valid_km2, 1),
-            `Vehicles per km²` = round(labelled_vehicles / valid_km2, 2),
-            Band = ifelse(labelled_vehicles / valid_km2 >= 6, "dense",
-                   ifelse(labelled_vehicles / valid_km2 < 2.5, "sparse", "mid"))) |>
-  arrange(desc(`Vehicles per km²`))
-```
-
-These ten hold 580 of the 789 labelled vehicles in the corpus, roughly three quarters of it. Density
-spans an order of magnitude, from 25.5 vehicles per square kilometre on Centralia down to 2.45 on
-Yakima-Toppenish. Area is imaged ground rather than raster size, which for these corridor clips is a
-large distinction: the stored rasters are mostly empty margin.
-
-One scene is worth singling out. `Tacoma-Centralia_01` was withheld from the training set of every
-model considered here, so it is the only scene in the set where no model has an advantage.
+::: lede
+**`adamiak-v2` at 64 px is the best configuration measured: F1 0.704 at a count ratio of 0.97.** Window
+size makes almost no difference once the operating point is re-tuned for it, a spread of 0.014 across
+64 down to 24 px. What matters more is that **only three of eleven models can change window at all**
+without failing outright. `adamiak-v2` scores higher than `warmup-v1` at every working window, but
+`warmup-v1`'s per-scene variance is two and a half times tighter, which for a counting programme is the
+more useful property. Traffic density predicts performance more strongly than either.
+:::
 
 # Results
 
 ```{r headline}
 COMPLETE |>
   transmute(Model = model, Window = paste0(window, "px"),
-            Gate = gate, Threshold = thr, `Dedup (px)` = dedup,
-            TP, FP, FN,
+            Gate = gate, Threshold = thr, `Dedup (px)` = dedup, TP, FP, FN,
             Precision = round(P, 3), Recall = round(R, 3), F1 = round(F1, 3),
             `Count ratio` = round(ratio, 2)) |>
   arrange(Model, desc(Window))
 ```
 
-**`adamiak-v2` at 64 pixels is the strongest configuration measured, at F1 0.704.** It finds 401 of
-the 580 labelled vehicles at 72 percent precision, and reports 560 detections against 580 present, a
-count ratio of 0.97. That figure independently reproduces a result measured earlier on the full
-21-scene corpus, where the same model and operating point scored 0.690, so it is not an artefact of
-this scene selection.
+Every row is that model and window at its own best operating point, found by re-sweeping the keypoint
+gate, the score threshold and the duplicate radius over the stored detection records. Ten scenes, 580
+labelled vehicles.
 
-**`warmup-v1` is the weaker detector at every window**, peaking at 0.630. It consistently finds a
-similar number of real vehicles but reports many more detections overall: 528 detections for 349 true
-positives at its best setting, against `adamiak-v2`'s 560 for 401. The difference between the two
-models is not in finding vehicles but in telling its own good detections from its bad ones.
+`adamiak-v2` at 64 px finds 401 of the 580 vehicles at 72 percent precision, reporting 560 detections
+against 580 present. That reproduces a figure measured separately on the full 21-scene corpus, where
+the same model and operating point scored 0.690, so it is not an artefact of this scene selection.
 
-**Two rows are a model failure rather than a window effect.** `adamiak-v2` at 32 and 24 pixels
-produced 179 and 805 raw detections respectively, against 8,988 at 64 pixels. Tested directly on 50
-chips each centred on a real labelled vehicle, it fires on 50 of 50 at 64 pixels and 0 of 50 at 32
-pixels. The model simply stops functioning at those input sizes. Its rows are reported for
-completeness but measure brittleness, not window size.
+`warmup-v1` peaks at 0.630. It finds a similar number of real vehicles but reports many more detections
+overall, 528 for 349 true positives against `adamiak-v2`'s 560 for 401. The gap between them is not in
+finding vehicles but in separating good detections from bad ones.
 
-# Window size makes very little difference
+The `adamiak-v2` rows at 32 and 24 px are a model failure rather than a window effect, explained in
+section 3.
 
-```{r fig-window, fig.height=4.4, fig.width=11}
+# Window size makes almost no difference
+
+```{r fig-window, fig.height=4.6, fig.width=11}
 COMPLETE |>
-  select(model, window, Precision = P, Recall = R, F1) |>
-  pivot_longer(c(Precision, Recall, F1), names_to = "metric", values_to = "value") |>
-  mutate(metric = factor(metric, levels = c("Precision", "Recall", "F1"))) |>
+  select(model, window, Precision = P, Recall = R, F1, `Count ratio` = ratio) |>
+  pivot_longer(c(Precision, Recall, F1, `Count ratio`), names_to = "metric", values_to = "value") |>
+  mutate(metric = factor(metric, levels = c("Precision", "Recall", "F1", "Count ratio"))) |>
   ggplot(aes(window, value, colour = model)) +
+  geom_hline(data = tibble(metric = factor("Count ratio",
+               levels = c("Precision", "Recall", "F1", "Count ratio")), y = 1),
+             aes(yintercept = y), linetype = "dashed", colour = "grey45") +
   geom_line(linewidth = 1) + geom_point(size = 2.4) +
-  facet_wrap(~ metric, nrow = 1) +
+  facet_wrap(~ metric, nrow = 1, scales = "free_y") +
   scale_colour_manual(values = PAL) +
   scale_x_reverse(breaks = c(64, 48, 32, 24), labels = paste0(c(64, 48, 32, 24), "px")) +
-  scale_y_continuous(limits = c(0, 0.85), labels = percent_format(accuracy = 1)) +
-  labs(title = "Precision, recall and F1 by sliding-window size",
-       subtitle = "Each point at its own best operating point. Ten scenes, 580 labelled vehicles.",
+  labs(title = "Precision, recall, F1 and count ratio by window size",
+       subtitle = "Each point at its own best operating point. The dashed line is count parity.",
        x = "window size", y = NULL,
        caption = "warmup-v1 trades recall for precision as the window shrinks, leaving F1 flat. adamiak-v2's fall below 48px is the model failing to run.")
 ```
 
-The three panels show the mechanism rather than just the outcome. As the window shrinks, `warmup-v1`
-moves up in precision and down in recall by almost the same amount, which is why the F1 panel looks
-flat. Nothing is being gained or lost overall; the operating point is sliding along the same
-precision-recall curve.
+For `warmup-v1`, the model that functions at every window, F1 across 64, 48, 32 and 24 px is 0.616,
+0.617, 0.630 and 0.622. A spread of 0.014, with a shallow peak at 32.
 
-```{r fig-count-ratio, fig.height=4.2}
-COMPLETE |>
-  ggplot(aes(window, ratio, colour = model)) +
-  geom_hline(yintercept = 1, linetype = "dashed", colour = "grey35") +
-  geom_line(linewidth = 1) + geom_point(size = 2.6) +
-  scale_colour_manual(values = PAL) +
-  scale_x_reverse(breaks = c(64, 48, 32, 24), labels = paste0(c(64, 48, 32, 24), "px")) +
-  scale_y_continuous(limits = c(0, 1.4)) +
-  labs(title = "Detections reported per labelled vehicle",
-       subtitle = "The dashed line is count parity, one detection per vehicle present.",
-       x = "window size", y = "count ratio",
-       caption = "warmup-v1 crosses parity between 48 and 32 px; adamiak-v2 sits just under it at 64.")
+The first two panels show why. As the window shrinks, precision climbs from 0.567 to 0.661 and recall
+falls from 0.674 to 0.602 by almost the same amount. Nothing is gained or lost overall; the operating
+point slides along the same precision-recall curve. What does move usefully is the count, which crosses
+parity between 48 and 32 px to land at 0.91, against 1.19 at 64.
+
+This is worth stating because a single-scene test suggested the opposite. On a dense scene with the
+gate held at a value tuned for 64 px, a 24 px window appeared to lift recall from 0.500 to 0.732.
+Re-tuning the gate per window absorbs nearly all of that. The window was compensating for a mis-set
+gate rather than contributing anything itself.
+
+# Most models cannot change window at all
+
+Before treating window size as a tunable parameter it is worth checking which models tolerate it. Every
+registered model was given 60 chips, each centred on a real labelled vehicle, at all four windows. The
+measure is whether it returns any detection above 0.3 on a chip that definitely contains a vehicle.
+
+```{r robust, fig.height=4.8}
+rb |>
+  mutate(model = fct_reorder(model, hits, .fun = sum),
+         w = factor(paste0(window, "px"), levels = paste0(c(64, 48, 32, 24), "px"))) |>
+  ggplot(aes(w, model, fill = hits / n)) +
+  geom_tile(colour = "white", linewidth = 1.2) +
+  geom_text(aes(label = hits, colour = hits > 35), size = 3.2, show.legend = FALSE) +
+  scale_colour_manual(values = c(`TRUE` = "white", `FALSE` = "grey20")) +
+  scale_fill_gradient(low = "#f7f2ea", high = "#2a78d6", labels = percent_format(),
+                      limits = c(0, 1), name = NULL) +
+  labs(title = "Detections on 60 chips centred on real vehicles",
+       subtitle = "A model that cannot fire on a centred vehicle cannot be evaluated at that window.",
+       x = "window size", y = NULL,
+       caption = "Only jitter-mv, warmup-v1 and nojitter-v1 hold up across the full range.")
 ```
 
-For a counting deliverable the third panel matters more than F1. `warmup-v1` over-reports by 19 percent
-at 64 pixels and crosses parity between 48 and 32, landing at 0.91. `adamiak-v2` sits at 0.97 at its
-working window. Those are the two configurations a count could actually be built on.
+Three models hold up across the range: `jitter-mv`, `warmup-v1` and `nojitter-v1`. Every other model
+degrades or fails outright below 48 px. `adamiak-v2` goes from 58 of 60 at its native window to 0 of 60
+at 32 px. `adamiak-all` collapses a step earlier, 53 to 6 at 48 px.
 
-For `warmup-v1`, the model that functions at every window, F1 across 64, 48, 32 and 24 pixels is
-0.616, 0.617, 0.630 and 0.622. That is a spread of 0.014, with a shallow peak at 32 pixels. For
-practical purposes the window does not matter once the operating point is re-tuned for it.
+The three that survive are not the three largest training sets, which rules out data volume as the
+explanation: `jitter-mv` holds up on 411 chips while `adamiak-all` fails on 538. What they share is
+that all three were trained from the **padded 96 px export**, the one carrying multi-vehicle targets.
+In those chips a neighbouring vehicle can sit anywhere in the frame, so the model sees off-centre
+vehicles during training even when translation jitter is switched off. That appears to be what lets a
+model tolerate a change of input size.
 
-This is worth stating plainly because a single-scene test suggested otherwise. On a dense scene with
-the gate held fixed at a value tuned for 64 pixels, a 24-pixel window appeared to lift recall from
-0.500 to 0.732. Re-tuning the gate per window absorbs almost all of that. The window was compensating
-for a mis-set gate rather than contributing anything of its own.
-
-What the window does change is the balance between precision and recall. Smaller windows push
-`warmup-v1` toward precision, from 0.567 at 64 pixels to 0.661 at 32, while recall falls from 0.674 to
-0.602. F1 stays level because the two move against each other. If the count matters more than either,
-the 32-pixel setting is the one that lands closest to parity at 0.91.
+The practical consequence is that window size is a parameter only for those three. For the rest it is a
+fixed property of how they were built, and evaluating them at 32 or 24 px measures a failure mode
+rather than a preference.
 
 # Consistency between scenes
 
@@ -206,50 +184,46 @@ box_metric <- function(var, title, cap) {
 }
 ```
 
-```{r fig-box-prec, fig.height=4.4}
-box_metric("P", "Per-scene precision",
-  "Hollow points and dotted boxes are the two adamiak-v2 configurations where the model does not run; they are shown rather than dropped.")
-```
-
-Precision separates the two clearly. `adamiak-v2` runs higher at both working windows, but its
-per-scene values are scattered across a much wider range, so the average conceals scenes where it is
-considerably worse than the headline suggests.
-
-```{r fig-box-recall, fig.height=4.4}
-box_metric("R", "Per-scene recall",
-  "Both models vary widely in recall between scenes. adamiak-v2 at 32 and 24 px is near zero because the model does not fire, not because the window is bad.")
-```
-
-Recall is where both models are least consistent. The low outliers are the sparse scenes, where a
-handful of vehicles spread across a large area means a few misses move the number a long way. That
-spread is the single largest contributor to the variance in the F1 panel below.
-
-```{r fig-box-f1, fig.height=4.4}
+```{r fig-box-f1, fig.height=4.3}
 box_metric("F1", "Per-scene F1",
-  "warmup-v1 clusters far more tightly at every window. The dotted adamiak-v2 boxes are its non-functioning configurations.")
+  "warmup-v1 clusters far more tightly at every window. Hollow points and dotted boxes are adamiak-v2's non-functioning configurations, shown rather than dropped.")
 ```
 
 ```{r spread-table}
 per |>
   filter(model != "nojitter-v1") |>
-  group_by(Model = model, Window = paste0(window, "px")) |>
+  mutate(Model = ifelse(works, model, paste0(model, " *"))) |>
+  group_by(Model, Window = paste0(window, "px")) |>
   summarise(Scenes = n(), `F1 mean` = round(mean(F1), 3), `F1 SD` = round(sd(F1), 3),
             `F1 min` = round(min(F1), 3), `F1 max` = round(max(F1), 3),
             `Recall SD` = round(sd(R), 3), `Ratio SD` = round(sd(ratio), 3), .groups = "drop") |>
   arrange(Model, desc(Window))
 ```
 
-`adamiak-v2` has the higher average but much wider spread. At 64 pixels its per-scene F1 standard
-deviation is 0.182 against `warmup-v1`'s 0.072, so its variance is roughly six times larger. Its worst
-scene scores 0.324 where `warmup-v1`'s worst is 0.458.
+`adamiak-v2` has the higher average and much wider spread. At 64 px its per-scene F1 standard deviation
+is 0.182 against `warmup-v1`'s 0.072, so its variance is roughly six times larger, and its worst scene
+scores 0.324 where `warmup-v1`'s worst is 0.458.
 
-That trade has practical weight for a counting programme. A detector whose error is similar everywhere
-can be corrected with a single adjustment factor. One that is excellent on some corridors and weak on
-others needs a different correction in each place, which is far harder to justify. On that criterion
-`warmup-v1` is the better instrument despite the lower headline number, which is the same conclusion
-its lower count-ratio spread points to.
+That trade has practical weight. A detector whose error is similar everywhere can be corrected with a
+single adjustment factor. One that is excellent on some corridors and weak on others needs a different
+correction in each place. On that criterion `warmup-v1` is the better instrument despite the lower
+headline number, and its tighter count-ratio spread points the same way.
 
-# Performance by traffic density
+```{r fig-box-prec, fig.height=4.3}
+box_metric("P", "Per-scene precision",
+  "adamiak-v2 is the more precise model at every working window, and its spread is wider at both ends.")
+```
+
+```{r fig-box-recall, fig.height=4.3}
+box_metric("R", "Per-scene recall",
+  "Recall is where both models are least consistent. The low outliers are the sparse scenes.")
+```
+
+Recall is where both are least consistent, and the low outliers are the sparse scenes, where a handful
+of vehicles across a large area means a few misses move the number a long way. That spread is the
+largest single contributor to the F1 variance above.
+
+# Traffic density predicts performance
 
 ```{r density}
 per |>
@@ -264,124 +238,77 @@ per |>
   arrange(Model, desc(Window), Band)
 ```
 
-Rows marked `*` are the two `adamiak-v2` configurations where the model does not run; their numbers
-are a failure to fire rather than a property of the density band, and are included only so nothing is
-dropped without explanation.
+At 64 px `adamiak-v2` scores 0.778 on the dense scenes against 0.568 on the sparse ones, and
+`warmup-v1` 0.650 against 0.549. Density is the strongest single predictor of per-scene performance
+here, stronger than corridor or terrain.
 
-Both models perform substantially better where traffic is heavier, and the gap is large. At 64 pixels
-`adamiak-v2` scores 0.778 on the dense scenes against 0.568 on the sparse ones, and `warmup-v1` 0.650
-against 0.549. Density is the strongest single predictor of per-scene performance in this data,
-stronger than corridor or terrain type.
+The count ratio moves the same way. Both models over-report where traffic is heavy and under-report
+where it is sparse, so a single global calibration factor would be wrong at both ends. Fitting the
+correction per density band is the obvious next step and needs no retraining.
 
-The count ratio moves with it in the same direction. Both models over-report on dense scenes and
-under-report on sparse ones, which means a single global calibration factor would be wrong at both
-ends. Fitting the correction per density band is the obvious next step and requires no retraining.
+Rows marked `*` are the two `adamiak-v2` configurations where the model does not run; their numbers are
+a failure to fire rather than a property of the band.
 
-# Does a smaller window lose the larger echoes?
+# A smaller window does not lose the larger echoes
 
-A reasonable concern about small windows is that they should truncate large echoes preferentially: a
-big echo fits inside fewer window positions than a small one, so a 24-pixel window might systematically
-discard exactly the largest vehicles. Since echo area is the main signal distinguishing a truck from a
-car, that would corrupt the quantity the project cares about.
+A reasonable objection to small windows is that they should truncate large echoes preferentially, since
+a big echo fits inside fewer window positions than a small one. Because echo area is the main signal
+separating a truck from a car, that would corrupt the quantity the project cares about.
 
-```{r fig-area, fig.height=4.4}
+```{r fig-area, fig.height=4.2}
 gtarea |>
   filter(model == "warmup-v1") |>
   group_by(window, quartile) |>
-  summarise(recall = mean(found), n = n(), .groups = "drop") |>
+  summarise(recall = mean(found), .groups = "drop") |>
   mutate(w = factor(paste0(window, "px"), levels = paste0(c(64, 48, 32, 24), "px"))) |>
   ggplot(aes(quartile, recall, fill = w)) +
   geom_col(position = position_dodge(width = 0.8), width = 0.72) +
   scale_y_continuous(limits = c(0, 1.05), labels = percent_format(accuracy = 1)) +
   scale_fill_brewer(palette = "Oranges", direction = -1) +
   labs(title = "warmup-v1: share of labelled vehicles detected, by echo size",
-       subtitle = "Ground-truth echo area quartiles. Q1 is the smallest echoes, Q4 the largest. No gate, threshold 0.05.",
+       subtitle = "Ground-truth echo area quartiles, Q1 smallest to Q4 largest. No gate, threshold 0.05.",
        x = "ground-truth echo area quartile", y = "detected",
        caption = "Flat across quartiles at every window: a smaller window does not preferentially lose large echoes.")
 ```
 
-```{r area-table}
-gtarea |>
-  filter(model != "nojitter-v1") |>
-  mutate(Model = ifelse(model == "adamiak-v2" & window %in% c(24, 32), paste0(model, " *"), model)) |>
-  group_by(Model, Window = paste0(window, "px"), Quartile = quartile) |>
-  summarise(Vehicles = n(), Detected = round(mean(found), 3), .groups = "drop") |>
-  pivot_wider(names_from = Quartile, values_from = c(Vehicles, Detected)) |>
-  arrange(Model, desc(Window))
+It does not happen. For `warmup-v1` at 24 px the share of labelled vehicles reached by at least one
+detection is 0.987, 0.993, 0.986 and 1.000 from smallest quartile to largest. No downward trend at the
+large end at any window, and the largest quartile is found most often.
+
+The opposite mild effect appears in `adamiak-v2`, where detection rises with echo size from 0.832 to
+0.938 at 64 px. Larger, brighter echoes produce sharper keypoint responses and are easier to find,
+which favours a truck count rather than working against it. Since the gate selects on keypoint
+confidence and that rises with area, the deployed pipeline is if anything biased toward large echoes.
+
+These are raw detection ceilings, measured with no gate at the lowest threshold, so they describe what
+the model reaches rather than what a deployed configuration reports.
+
+# The ten scenes
+
+Chosen for at least 29 labelled vehicles each, so per-scene statistics are stable, and to span the
+density range across six corridors. The same ten were used for every model and window.
+
+```{r scenes}
+scenes |>
+  filter(scene %in% USED) |>
+  transmute(Scene = scene, Corridor = corridor, Vehicles = labelled_vehicles,
+            `Area (km²)` = round(valid_km2, 1),
+            `Vehicles per km²` = round(labelled_vehicles / valid_km2, 2),
+            Band = ifelse(labelled_vehicles / valid_km2 >= 6, "dense",
+                   ifelse(labelled_vehicles / valid_km2 < 2.5, "sparse", "mid"))) |>
+  arrange(desc(`Vehicles per km²`))
 ```
 
-The concern does not materialise. For `warmup-v1` at 24 pixels, the share of labelled vehicles reached
-by at least one detection is 0.987, 0.993, 0.986 and 1.000 across the four size quartiles from smallest
-to largest. There is no downward trend at the large end at any window size, and the largest quartile is
-found most often.
-
-The opposite mild effect appears in `adamiak-v2`, where detection rises with echo size, from 0.832 in
-the smallest quartile to 0.938 in the largest at 64 pixels. Larger, brighter echoes produce sharper
-keypoint responses and are easier to find, which works in favour of a truck count rather than against
-it.
-
-One qualification. These figures are the raw detection ceiling, measured with no gate and at the lowest
-threshold, so they describe what the model reaches rather than what a deployed configuration reports.
-The gate does select on keypoint confidence, and keypoint confidence rises with echo area, so the
-deployed pipeline is if anything biased toward large echoes.
-
-# Which models can use the window at all
-
-Before ranking models across window sizes it is worth checking which ones function at each size. Every
-model in the registry was given 60 chips, each centred on a real labelled vehicle across a dense and a
-mid-density scene, at all four windows. The measure is simply whether the model returns any detection
-above 0.3 on a chip that definitely contains a vehicle.
-
-```{r robust, fig.height=4.8}
-rb <- read_csv("data/window_robustness.csv", show_col_types = FALSE)
-rb |>
-  mutate(model = fct_reorder(model, hits, .fun = sum),
-         w = factor(paste0(window, "px"), levels = paste0(c(64, 48, 32, 24), "px"))) |>
-  ggplot(aes(w, model, fill = hits / n)) +
-  geom_tile(colour = "white", linewidth = 1.2) +
-  geom_text(aes(label = hits), size = 3.2,
-            colour = ifelse(rb$hits[order(rb$model, rb$window)] > 35, "white", "grey20")) +
-  scale_fill_gradient(low = "#f7f2ea", high = "#2a78d6", labels = percent_format(),
-                      limits = c(0, 1), name = NULL) +
-  labs(title = "Detections on 60 chips centred on real vehicles",
-       subtitle = "A model that cannot fire on a centred vehicle cannot be evaluated at that window.",
-       x = "window size", y = NULL,
-       caption = "Only jitter-mv, warmup-v1 and nojitter-v1 hold up across the full range.")
-```
-
-```{r robust-table}
-read_csv("data/window_robustness.csv", show_col_types = FALSE) |>
-  mutate(pct = paste0(round(100 * hits / n), "%")) |>
-  select(model, window, pct) |>
-  pivot_wider(names_from = window, values_from = pct) |>
-  rename(Model = model, `64px` = `64`, `48px` = `48`, `32px` = `32`, `24px` = `24`)
-```
-
-Three models hold up across the whole range: `jitter-mv`, `warmup-v1` and `nojitter-v1`. Every other
-model degrades or fails outright below 48 pixels. `adamiak-v2` goes from 58 of 60 at its native window
-to 0 of 60 at 32 pixels, and `adamiak-all` collapses one step earlier, from 53 to 6 at 48 pixels.
-
-The three that survive share one property, and it is not the one I expected. They are not the three
-largest training sets: `jitter-mv` was trained on 411 chips and holds up, while `adamiak-all` was
-trained on 538 and does not. What the three have in common is that they were all trained from the
-**padded 96-pixel export**, the one that carries multi-vehicle targets. In those chips a neighbouring
-vehicle can appear anywhere in the frame rather than dead centre, so the model sees vehicles at
-off-centre positions during training even when translation jitter is switched off. That appears to be
-what makes a model tolerate a change of input size.
-
-The practical consequence is that a ranking across window sizes is only meaningful for those three.
-For the rest, the window is not a parameter to tune but a setting they were built for, and comparing
-them at 32 or 24 pixels measures a failure mode rather than a preference.
+These hold 580 of the 789 labelled vehicles in the corpus. Density spans an order of magnitude, 25.5
+vehicles per square kilometre down to 2.45. Area is imaged ground rather than raster size, which for
+these corridor clips is a large distinction: the stored rasters are mostly empty margin.
+`Tacoma-Centralia_01` was withheld from every model's training set, so it is the only scene here where
+no model has an advantage.
 
 # Exact configuration
 
-Every setting below is read from the `manifest.json` each collection run writes beside its
-`detections.csv`, so this is what the runs actually used rather than what they were meant to use.
-
-## The collection pass
-
-Each of the eight runs was one pass of `src/collect_inference.py` over the ten scenes. The command,
-with `$W` taking 64, 48, 32 and 24 in turn and `$M` each model id:
+Values are read from the `manifest.json` each collection run writes beside its `detections.csv`, so
+this is what the runs used rather than what they were meant to use.
 
 ```bash
 python3 src/collect_inference.py \
@@ -394,11 +321,6 @@ blaine-bellingham_03_20260504" \
     --out analysis/truck-detection-report/data/window-sweep/${M#kprcnn-}_w${W}
 ```
 
-Runs were interleaved by window so that each window produced both models before moving on, and any run
-whose output already existed was skipped, making the sweep resumable.
-
-## Parameters, as recorded
-
 ```{r manifest, echo=FALSE}
 mf <- list.files("data/window-sweep", pattern = "manifest.json", recursive = TRUE, full.names = TRUE)
 j  <- jsonlite::fromJSON(mf[grep("_w48", mf)[1]])
@@ -410,94 +332,65 @@ tibble::tribble(
   "min_valid",               as.character(j$min_valid),                 "window skipped unless this share of pixels carry data",
   "roi_score_thresh",        as.character(j$roi_score_thresh),          "torchvision floor; the lowest score recorded",
   "roi_nms_thresh",          as.character(j$roi_nms_thresh),            "overlap suppression inside each window",
-  "roi_detections_per_img",  as.character(j$roi_detections_per_img),    "cap per window",
   "top1_only",               as.character(j$top1_only),                 "FALSE: every detection kept, not just the window's best",
   "dedup_px",                paste0(j$dedup_px, " (", j$dedup_m, " m)"),"radius at collection; re-swept offline",
   "match_px",                paste0(j$match_px, " (", j$match_m, " m)"),"red-keypoint distance for a correct detection",
-  "gsd_m",                   as.character(j$gsd_m),                     "ground sample distance",
-  "anchor_sizes",            paste(j$arch$anchor_sizes, collapse = "/"),"unchanged from training",
-  "aspect_ratios",           paste(j$arch$aspect_ratios, collapse = "/"),"unchanged from training"
+  "anchor_sizes",            paste(j$arch$anchor_sizes, collapse = "/"),"unchanged from training"
 )
 ```
 
-The two settings worth drawing out. `top1_only = FALSE` means every detection above the 0.05 floor was
-written to disk, not just the highest-scoring one per window, which is what makes the offline re-sweep
-possible. And the model input is always three times the window, which is why a vehicle occupies the
-same number of pixels in model space at 24 pixels as at 64 and the anchor set stays valid.
-
-## Choosing the operating point offline
-
-Because the raw records carry every detection with its keypoint score, the three post-processing
-controls were re-swept from disk with no further inference. For each model and window, every
-combination below was scored and the best F1 kept:
+Two settings carry the method. `top1_only = FALSE` writes every detection above the 0.05 floor to disk,
+not just each window's best, which is what makes the offline re-sweep possible. And the model input is
+always three times the window, so a vehicle occupies the same pixels in model space at 24 px as at 64
+and the anchor set stays valid.
 
 ```python
 GATES  = [None] + arange(floor(min_kp_score), ceil(max_kp_score) + 0.5, 0.5)  # per-model range
-THRS   = arange(0.05, 0.96, 0.05)                                            # 19 values
-DEDUPS = [8.0, 16.0, 32.0]                                                   # px, = 24/48/96 m
-```
+THRS   = arange(0.05, 0.96, 0.05)
+DEDUPS = [8.0, 16.0, 32.0]        # px, = 24/48/96 m
 
-The gate range is derived from each model's own observed keypoint-score distribution rather than a
-fixed span, because the score is an uncalibrated logit whose scale differs between models. Capping it
-at a shared value is precisely the mistake that produced the earlier, wrong window comparison.
-
-## Scoring, in order
-
-```python
 def evaluate(detections, gate, dedup_px, threshold):
     kept, used = [], set()
-    for d in sorted(detections, key=lambda d: -d.score):   # descending confidence
-        if gate is not None and d.kp_score_mean <= gate:   # 1. keypoint-confidence gate
-            continue
-        if d.score < threshold:                            # 2. box-score threshold
-            continue
-        if any(dist(d.red, k.red) < dedup_px for k in kept):  # 3. duplicate suppression
-            continue
+    for d in sorted(detections, key=lambda d: -d.score):             # descending confidence
+        if gate is not None and d.kp_score_mean <= gate: continue    # 1. keypoint gate
+        if d.score < threshold: continue                             # 2. score threshold
+        if any(dist(d.red, k.red) < dedup_px for k in kept): continue  # 3. dedup
         kept.append(d)
-        near = nearest_unclaimed_label(d.red, within=6px)  # 4. greedy consuming match
-        if near is not None:
-            used.add(near); d.is_tp = True
+        near = nearest_unclaimed_label(d.red, within=6px)             # 4. consuming match
+        if near is not None: used.add(near)
     TP = len(used); FP = len(kept) - TP; FN = n_labelled - TP
-    return TP / (TP + FP), TP / (TP + FN)                  # precision, recall
 ```
 
-Matching is greedy rather than optimal: detections are taken in descending confidence, each credited to
-its nearest still-unclaimed label within 18 metres, and that label is then removed from the pool. True
-positives are counted over labels, so a second detection on an already-claimed label is a false
-positive. False negatives are labels nothing reached.
+The gate range is derived per model from its own keypoint-score distribution rather than a fixed span,
+because the score is an uncalibrated logit whose scale differs between models. Capping it at a shared
+value is what produced an earlier, incorrect window comparison.
 
-Two consequences worth noting. Matching uses the red keypoint distance rather than box overlap, because
-at three metres per pixel a vehicle spans only a few pixels and box overlap is dominated by rounding, so
-none of these figures are comparable to published mAP. And because the duplicate radius was swept down
-to 8 pixels, below twice the 18 metre match radius, the one-to-one guarantee that a wider radius
-provides no longer holds automatically; the consuming step above is what enforces it.
+Matching is greedy, not optimal, and counts true positives over labels, so a second detection on an
+already-claimed label is a false positive. It uses red-keypoint distance rather than box overlap,
+because at three metres per pixel a vehicle spans a few pixels and box overlap is dominated by
+rounding. None of these figures are comparable to published mAP.
 
 # Limitations
 
-The strongest configuration in this report reaches F1 0.704 with a count ratio of 0.97, but that
-operating point was chosen on the same ten scenes it is scored on. An earlier leave-one-scene-out check
-on the full corpus found the same setting selected in all 21 folds with an identical pooled result, so
-this is unlikely to be badly overfitted, but it remains descriptive of this dataset rather than a
-validated deployment setting.
+The best configuration reaches F1 0.704 at a count ratio of 0.97, but that operating point was chosen
+on the same ten scenes it is scored on. A leave-one-scene-out check on the full corpus selected the
+same setting in all 21 folds with an identical pooled result, so it is unlikely to be badly overfitted,
+but it remains descriptive of this dataset rather than a validated deployment setting.
 
 Precision is a lower bound throughout. Only clear, well-formed echoes were labelled, so a detection
-landing on a real but unlabelled vehicle counts against precision despite being correct. Every
-precision and F1 figure here understates both models by an amount that cannot be quantified without
-labelling one scene exhaustively.
+landing on a real but unlabelled vehicle counts against precision despite being correct.
 
-The models are single-class. Nothing in the pipeline distinguishes a truck from a car, so what is
-counted is moving vehicles, and the interpretation as a truck count rests on the labelling policy
-having excluded cars informally. That has not been verified.
+The models are single-class. Nothing distinguishes a truck from a car, so what is counted is moving
+vehicles, and reading it as a truck count rests on the labelling policy having excluded cars
+informally. That has not been verified.
 
-The two models differ in training data as well as in recipe, so the head-to-head cannot attribute the
+The two models differ in training data as well as recipe, so the head-to-head cannot attribute the
 difference to any single change.
 
-A third model, `kprcnn-nojitter-v1`, finished training the same night and is not included above. Its
-collection across these scenes was still running when this report was generated, and a number computed
-from a partial run would not be comparable.
+`kprcnn-nojitter-v1` finished training the same night and is not included; its collection across these
+scenes was still running when this was generated.
 
 ---
 
 _Ten scenes, 580 labelled vehicles, two models, four window sizes, each at its own re-tuned operating
-point. Computed from per-detection records in `data/window-sweep/`; tables from
-`window_results.csv`, `window_per_scene.csv` and `window_gt_area_recall.csv`._
+point. Computed from per-detection records in `data/window-sweep/`._
