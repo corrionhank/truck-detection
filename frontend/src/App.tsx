@@ -1,11 +1,27 @@
 import { useEffect, useState, type ChangeEvent } from 'react'
-import { Truck, Play, Database, BarChart3, Layers, ScanLine, FileText, Loader2, Cpu, Images, BookOpen } from 'lucide-react'
+import { Truck, Play, Database, BarChart3, Layers, ScanLine, FileText, Loader2, Cpu, Images, BookOpen, Moon, Sun } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import annotationsSpec from './docs/annotations-spec.md?raw'
 
 // Sibling app (Satellite Data Tooling Hub) — the reciprocal nav target.
 const HUB_URL = 'http://localhost:5000/'
+
+// Light/dark. index.html stamps the saved value before first paint, so this hook only has
+// to keep the attribute and localStorage in step after that. The console opens dark, which
+// is what it has always done; the bare :root palette is light, so the attribute is always
+// written explicitly rather than relying on its absence.
+type Theme = 'light' | 'dark'
+function useTheme() {
+  const [theme, setTheme] = useState<Theme>(() => {
+    try { return (localStorage.getItem('theme') as Theme) || 'dark' } catch { return 'dark' }
+  })
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    try { localStorage.setItem('theme', theme) } catch { /* private mode */ }
+  }, [theme])
+  return { theme, toggle: () => setTheme((t) => (t === 'dark' ? 'light' : 'dark')) }
+}
 
 type Tab = 'dataset' | 'scenes' | 'results' | 'models' | 'training' | 'inference' | 'spec' | 'docs'
 
@@ -156,6 +172,7 @@ const SPLIT: Record<Split, { label: string; cls: string; mark: string; note: str
 }
 
 export default function App() {
+  const { theme, toggle } = useTheme()
   const [tab, setTab] = useState<Tab>('dataset')
   const [scenes, setScenes] = useState<Scene[]>([])
   const [registry, setRegistry] = useState<Registry | null>(null)
@@ -181,7 +198,14 @@ export default function App() {
             ← Satellite Data Tooling Hub
           </a>
         </div>
-        <span className="env-chip">ML Console</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+          <button className="theme-btn" onClick={toggle}
+                  title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+                  aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}>
+            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+          <span className="env-chip">ML Console</span>
+        </span>
       </header>
 
       <main className="content">
