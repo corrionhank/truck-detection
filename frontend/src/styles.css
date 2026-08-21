@@ -255,3 +255,9 @@ input[type=range] { accent-color: var(--accent); }
 .ln-pred.dim, .ln-gt.dim { stroke: rgba(255,255,255,.22); }
 .kp-gt.dim, .kp-pred.dim { opacity: .5; }
 .chipcard-nb { display: flex; gap: 6px; font-family: var(--font-mono); font-size: 9.5px; color: var(--text-3); padding: 0 2px 1px; opacity: .8; }
+
+/* --- annotation density band (scene lists) --- */
+.dband { font-weight: 600; padding: 0 4px; border-radius: 3px; }
+.dband.d-dense  { color: var(--success); background: rgba(47,169,104,.14); }
+.dband.d-mid    { color: var(--accent-hover); background: rgba(221,160,50,.14); }
+.dband.d-sparse { color: var(--danger); background: rgba(209,69,43,.14); }

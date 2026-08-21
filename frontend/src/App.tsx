@@ -24,12 +24,36 @@ type ModelEntry = {
 }
 type Registry = { active: string; models: ModelEntry[] }
 
-type Scene = { name: string; vehicles: number }
+type Scene = {
+  name: string; vehicles: number
+  // Imaged ground, not raster dimensions: scenes are ordered as corridor clips, so the
+  // stored raster is 97-99% black margin and width*height overstates area by up to 67x.
+  valid_px?: number | null; width?: number | null; height?: number | null
+  coverage?: number | null       // valid_px / (width*height)
+  km2?: number | null            // valid_px * 9 m2
+  density?: number | null        // vehicles per km2 of imaged ground
+}
+
+// Model accuracy tracks density hard: dense scenes score F1 0.77 with SD 0.04, sparse
+// ones 0.49 with SD 0.25. Banding it makes that visible everywhere a scene is listed.
+const DBAND = (d?: number | null) =>
+  d == null ? null : d >= 6 ? 'dense' : d >= 2.5 ? 'mid' : 'sparse'
+function Density({ d, km2 }: { d?: number | null; km2?: number | null }) {
+  const b = DBAND(d)
+  if (b == null) return km2 ? <span className="hint"> · {km2.toFixed(1)} km²</span> : null
+  return (
+    <span className="hint">
+      {' · '}{km2!.toFixed(1)} km² · <span className={`dband d-${b}`}>{d!.toFixed(1)}/km²</span>
+    </span>
+  )
+}
 type Dataset = {
   vehicles: number
   echoes: number
   scenes_labelled: number
-  per_scene: Record<string, { vehicles: number; echoes: number }>
+  per_scene: Record<string, { vehicles: number; echoes: number; km2?: number | null;
+                              valid_px?: number | null; coverage?: number | null;
+                              density?: number | null }>
 }
 type Detection = { score: number; red_utm: [number, number]; keypoints_px: number[][] }
 type Pt = [number, number]
@@ -224,7 +248,7 @@ function DatasetView({ totalScenes }: { totalScenes: number }) {
             <div key={name}>
               <div className="row-between" style={{ marginBottom: 3 }}>
                 <span className="mono" style={{ fontSize: 13 }}>{name}</span>
-                <span className="hint">{s.vehicles} veh · {s.echoes} echoes</span>
+                <span className="hint">{s.vehicles} veh · {s.echoes} echoes<Density d={s.density} km2={s.km2} /></span>
               </div>
               <div className="meter" style={{ height: 6 }}>
                 <div className="meter-fill" style={{ width: `${(100 * s.vehicles) / maxV}%` }} />
@@ -606,7 +630,8 @@ function TrainingView({ scenes, refresh }: { scenes: Scene[]; refresh: () => voi
         {scenes.map((s) => (
           <div key={s.name} className="row-between train-scene">
             <span className="mono" style={{ fontSize: 13 }}>{s.name}{' '}
-              <span className="hint">{s.vehicles ? `${s.vehicles} veh` : 'unlabeled'}</span></span>
+              <span className="hint">{s.vehicles ? `${s.vehicles} veh` : 'unlabeled'}</span>
+              <Density d={s.density} km2={s.km2} /></span>
             <span style={{ display: 'flex', gap: 6 }}>
               <button className={`role ${roles[s.name] === 'train' ? 'role-train' : ''}`}
                 onClick={() => setRole(s.name, 'train')} disabled={running}>train</button>
@@ -725,7 +750,8 @@ function ScenesView({ scenes, registry, refreshScenes }: { scenes: Scene[]; regi
           return (
             <div key={s.name} className="row-between train-scene">
               <span className="mono" style={{ fontSize: 13 }}>{s.name}{' '}
-                <span className="hint">{s.vehicles ? `${s.vehicles} veh` : 'unlabeled'}</span></span>
+                <span className="hint">{s.vehicles ? `${s.vehicles} veh` : 'unlabeled'}</span>
+                <Density d={s.density} km2={s.km2} /></span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span className={`badge-state ${si.cls}`}>{si.label}</span>
                 <button className="ghost" style={{ height: 26 }} disabled={busy === s.name}
@@ -810,7 +836,7 @@ function InferenceView({ scenes, registry, refreshScenes }: { scenes: Scene[]; r
       <select value={scene} onChange={(e) => setScene(e.target.value)} disabled={busy}>
         {scenes.map((s) => (
           <option key={s.name} value={s.name}>
-            {s.name}{s.vehicles ? ` · ${s.vehicles} labeled` : ' · unlabeled'} · {SPLIT[evalSplit(model, s.name)].mark}
+            {s.name}{s.vehicles ? ` · ${s.vehicles} labeled` : ' · unlabeled'}{s.density ? ` · ${s.density.toFixed(1)}/km²` : ''} · {SPLIT[evalSplit(model, s.name)].mark}
           </option>
         ))}
       </select>

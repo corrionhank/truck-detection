@@ -66,6 +66,14 @@ def dataset_stats():
         sub = g[g["scene"] == s]
         per_scene[s] = {"vehicles": int(sub["vehicle_id"].nunique()),
                         "echoes": int(len(sub))}
+    fp = scene_footprints()
+    for s, rec in per_scene.items():
+        f = fp.get(s, {})
+        km2 = f.get("km2") or 0.0
+        rec["valid_px"] = f.get("valid_px")
+        rec["km2"] = km2 or None
+        rec["coverage"] = f.get("coverage")
+        rec["density"] = round(rec["vehicles"] / km2, 2) if km2 else None
     return {
         "vehicles": int(g["vehicle_id"].nunique()),
         "echoes": int(len(g)),            # keypoints; 3 per vehicle (blue/red/green)
@@ -74,13 +82,77 @@ def dataset_stats():
     }
 
 
+FOOTPRINT_CACHE = REPO / "data" / "active" / ".scene_footprints.json"
+GSD_M = 3.0
+
+
+def scene_footprints():
+    """{scene: {valid_px, width, height, coverage, km2}} — the ACTUAL imaged area.
+
+    Scenes are ordered as clips around a corridor, so the stored raster is a bounding box
+    with large black margins where no data was captured. width*height therefore overstates
+    the imaged area badly, and a vehicles-per-pixel figure built on it is meaningless. This
+    counts the non-black pixels instead, which is what the detector actually sweeps.
+
+    Read at 1/8 resolution: the footprint is one contiguous blob, so the sampled valid
+    FRACTION is accurate to well under a percent, and it is ~64x faster than a full read.
+    Cached to disk and invalidated per scene by the GeoTIFF's mtime."""
+    import json as _json
+    import rasterio
+    from export_coco import RED, GREEN, BLUE
+    try:
+        cache = _json.loads(FOOTPRINT_CACHE.read_text())
+    except Exception:
+        cache = {}
+    out, dirty = {}, False
+    for tif in sorted(GEOTIFF_DIR.glob("*.tif")):
+        name, mt = tif.stem, int(tif.stat().st_mtime)
+        hit = cache.get(name)
+        if hit and hit.get("mtime") == mt:
+            out[name] = hit
+            continue
+        try:
+            with rasterio.open(tif) as src:
+                h, w = max(1, src.height // 8), max(1, src.width // 8)
+                r = src.read(RED, out_shape=(h, w)).astype("int64")
+                g = src.read(GREEN, out_shape=(h, w))
+                b = src.read(BLUE, out_shape=(h, w))
+                frac = float(((r + g + b) > 0).mean())
+                W, H = src.width, src.height
+        except Exception as e:
+            print(f"  ! footprint {name}: {e}", flush=True)
+            continue
+        valid_px = int(round(frac * W * H))
+        rec = {"mtime": mt, "width": W, "height": H, "valid_px": valid_px,
+               "coverage": round(frac, 4),
+               "km2": round(valid_px * GSD_M * GSD_M / 1e6, 3)}
+        cache[name] = rec; out[name] = rec; dirty = True
+    if dirty:
+        try:
+            FOOTPRINT_CACHE.write_text(_json.dumps(cache, indent=1))
+        except Exception:
+            pass
+    return out
+
+
 def all_scenes():
-    """Every scene GeoTIFF, tagged with its labelled-vehicle count (0 if none)."""
+    """Every scene GeoTIFF with its labelled-vehicle count and annotation density.
+
+    Density is vehicles per km2 of IMAGED ground, not per raster pixel, so scenes with
+    different clip sizes are comparable. Model accuracy tracks it strongly."""
     labelled = dataset_stats()["per_scene"]
+    fp = scene_footprints()
     scenes = []
     for tif in sorted(GEOTIFF_DIR.glob("*.tif")):
         name = tif.stem
-        scenes.append({"name": name, "vehicles": labelled.get(name, {}).get("vehicles", 0)})
+        veh = labelled.get(name, {}).get("vehicles", 0)
+        f = fp.get(name, {})
+        km2 = f.get("km2") or 0.0
+        scenes.append({"name": name, "vehicles": veh,
+                       "valid_px": f.get("valid_px"), "width": f.get("width"),
+                       "height": f.get("height"), "coverage": f.get("coverage"),
+                       "km2": km2 or None,
+                       "density": round(veh / km2, 2) if (km2 and veh) else None})
     return scenes
 
 

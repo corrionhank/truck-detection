@@ -77,3 +77,4 @@ Annotations-RGB_trg-echo-exchange/
 .RData
 analysis/**/*.html
 analysis/**/handoff/
+data/active/.scene_footprints.json
