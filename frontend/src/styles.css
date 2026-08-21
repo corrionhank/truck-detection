@@ -307,3 +307,9 @@ input[type=range] { accent-color: var(--accent); }
              align-items: center; justify-content: center; width: 30px; height: 30px;
              border-radius: var(--r-ctl); cursor: pointer; }
 .theme-btn:hover { color: var(--accent); background: var(--chrome-hover); }
+
+/* --- scenes list: keep every row one line tall --- */
+.scene-actions { display: flex; align-items: center; gap: 8px; width: 190px; justify-content: flex-end; flex: none; }
+.scene-actions .badge-state { white-space: nowrap; }
+.scene-remove { height: 26px; white-space: nowrap; flex: none; }
+.train-scene { min-height: 38px; }

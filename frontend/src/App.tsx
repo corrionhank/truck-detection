@@ -163,7 +163,7 @@ function evalSplit(m: ModelEntry | undefined, scene: string): Split {
   return 'unseen'
 }
 const SPLIT: Record<Split, { label: string; cls: string; mark: string; note: string }> = {
-  train: { label: 'TRAINING SCENE', cls: 's-failed', mark: '⚠ in training',
+  train: { label: 'TRAINING', cls: 's-failed', mark: '⚠ in training',
     note: 'This scene was in the selected model’s training set — metrics here are leaked (inflated), not a valid generalization estimate.' },
   heldout: { label: 'HELD-OUT', cls: 's-success', mark: 'held-out',
     note: 'The model’s designated held-out scene — a clean generalization test.' },
@@ -891,9 +891,9 @@ function ScenesView({ scenes, registry, refreshScenes }: { scenes: Scene[]; regi
                 <span className="hint">{s.vehicles ? `${s.vehicles} veh` : 'unlabeled'}</span></span>
               <span className="hint num" style={{ width: 78 }}>{s.km2 ? s.km2.toFixed(1) : '—'}</span>
               <span className="hint num" style={{ width: 78 }}>{s.density ? s.density.toFixed(1) : '—'}</span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 8, width: 150, justifyContent: 'flex-end' }}>
+              <span className="scene-actions">
                 <span className={`badge-state ${si.cls}`}>{si.label}</span>
-                <button className="ghost" style={{ height: 26 }} disabled={busy === s.name}
+                <button className="ghost scene-remove" disabled={busy === s.name}
                   onClick={() => remove(s.name, !!s.vehicles)}>
                   {busy === s.name ? <Loader2 size={12} className="spin" /> : '✕'} remove
                 </button>
