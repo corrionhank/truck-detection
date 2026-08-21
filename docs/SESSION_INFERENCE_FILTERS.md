@@ -167,8 +167,38 @@ Dedup runs after windows are merged, so **window size has no effect on it whatso
 | small window only | 24px | 73 | 8 | 0.727 | 6.64× |
 | small window + both | 24px | 112 | 10 | 0.909 | 10.18× |
 
-Removing top-1 recovered one detection and zero true positives, because filter 1 had already deleted
-the second truck before the pipeline could keep it.
+Removing top-1 recovered one detection and zero true positives.
+
+**Read this result with care.** The initial explanation was that filter 1 had already deleted the
+second truck. A follow-up test weakened that: raising the internal NMS from 0.5 to 0.9, which should
+let overlapping boxes coexist, also recovered zero true positives and only added false ones (24 px
+window: 16 detections to 19, TP unchanged at 6, F1 0.444 to 0.400).
+
+The likelier explanation is the test scene. `Bellingham_01` holds 11 labelled vehicles of which only
+**6 share a 64 px window with another**, so at most 6 trucks were ever recoverable, against TP counts
+of 2 to 10. That is too small a target to measure a 21% effect against. Section 3.7 lists the scenes
+where this actually matters: `Tacoma-Centralia_01` at 84%, both Centralia scenes at 82%. Corpus-wide
+54% of vehicles share a 64 px window.
+
+**These two negative results are therefore inconclusive, not disproof.** They are being re-run on a
+dense scene.
+
+### 3.5a How often two trucks share a window, by scene
+
+The fixes in 3.4 only matter where trucks are close together. Sharing a 64 px window, by scene:
+
+| scene | vehicles | sharing a window | share |
+|---|---:|---:|---:|
+| Tacoma-Centralia_01 | 80 | 67 | 84% |
+| Centralia_01 / _02 | 56 each | 46 each | 82% |
+| Tacoma-Centralia_02 | 89 | 57 | 64% |
+| spokane-i90_01 | 55 | 34 | 62% |
+| **Bellingham_01 (the test scene)** | **11** | **6** | **55%** |
+| Tri-Cities-New_01 | 105 | 50 | 48% |
+| Yakima-Toppenish_02 | 31 | 7 | 23% |
+
+Corpus-wide, **420 of 773 vehicles (54%) share a 64 px window**. The dense Centralia corridor is where
+the multi-truck-per-window problem lives, and it is also the corridor carrying most of the freight.
 
 ### 3.5 Small windows work by sidestepping the internal NMS
 
@@ -263,8 +293,14 @@ Defaults reproduce the previous behaviour exactly, so existing numbers stay comp
 - ~~Does a small window plus the gate beat a large window plus the gate?~~ **Answered in §3.7: they
   compose. The window governs recall, the gate governs precision and count.** Still needs confirming
   across all 21 scenes.
-- Does loosening internal NMS from 0.5 toward 0.9 recover the two-trucks-in-one-window case that
-  filter 1 currently removes?
+- Does loosening internal NMS from 0.5 toward 0.9 recover the two-trucks-in-one-window case? First
+  attempt said no, but it was measured on a scene with only 6 recoverable vehicles. Being re-run on
+  `Centralia_01` (56 vehicles, 82% sharing).
+- Is the multi-truck-per-window limit a pipeline problem or a **model** problem? Windows holding 2+
+  labelled trucks yield 1.90 detections on average against 1.38 for single-truck windows, so the model
+  does respond to a second truck, at roughly half rate. If the inference fixes cannot recover those,
+  the remaining gap is training-side and points at
+  [MULTI_VEHICLE_TARGETS.md](MULTI_VEHICLE_TARGETS.md).
 - All of the above needs the full 21-scene sweep rather than one sparse scene.
 - The gate interacts with the labelling policy: it selects for crisp, well-formed echoes, which is
   exactly what the annotators marked. Some of its gain may be better agreement with the labels rather
