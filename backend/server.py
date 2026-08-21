@@ -192,6 +192,10 @@ def api_detect():
     # the amount of surrounding context changes. Stride follows the window unless given.
     stride = int(body["stride"]) if body.get("stride") else None
     dedup_px = float(body.get("dedup_px", ds.DEDUP_PX))
+    top1 = bool(body.get("top1", True))
+    kp_gate = body.get("kp_gate")
+    kp_gate = float(kp_gate) if kp_gate is not None else None
+    nms = float(body["nms"]) if body.get("nms") else None
     if not scene:
         return jsonify({"error": "missing 'scene'"}), 400
     try:
@@ -203,7 +207,8 @@ def api_detect():
         # Only meaningful on a labelled scene; detect() returns None for chips otherwise.
         result = ds.detect(model, scene, stride=stride, thresh=thresh,
                            chips=bool(body.get("chips", True)),
-                           chip=chip, dedup_px=dedup_px)
+                           chip=chip, dedup_px=dedup_px, top1=top1,
+                           kp_gate=kp_gate, nms=nms)
     except (FileNotFoundError, KeyError) as e:
         return jsonify({"error": str(e)}), 404
     result["model_id"] = entry["id"]

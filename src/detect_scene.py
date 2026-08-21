@@ -242,7 +242,7 @@ def load_model(weights=None, anchors="default"):
 
 @torch.no_grad()
 def detect(model, scene, stride=None, thresh=0.3, min_valid=0.15, batch=12, chips=False,
-           chip=CHIP, dedup_px=DEDUP_PX):
+           chip=CHIP, dedup_px=DEDUP_PX, top1=True, kp_gate=None, nms=None):
     """Run sliding-window detection on one scene. Returns a structured dict and
     writes the montage/preview/JSON to outputs/. Pure Python types so a web
     backend can JSON-serialise the result directly."""
@@ -255,6 +255,11 @@ def detect(model, scene, stride=None, thresh=0.3, min_valid=0.15, batch=12, chip
     # a 32 px window at the 64 px setting would present every echo at double scale and the
     # anchors would not match. Smaller windows therefore trade context, not scale.
     chip = int(chip)
+    # Internal NMS deletes overlapping boxes INSIDE each window before we ever see them.
+    # Our boxes are the 3 keypoints plus padding, so two trucks a couple of hundred metres
+    # apart overlap heavily and one is silently dropped. Raising this lets them coexist.
+    if nms is not None:
+        model.roi_heads.nms_thresh = float(nms)
     model.transform.min_size = (chip * UPSCALE,)
     model.transform.max_size = int(chip * UPSCALE * (320 / 192))
     # Stride defaults to the same 0.625 ratio the 64/40 default uses. A stride at or above the
@@ -286,13 +291,26 @@ def detect(model, scene, stride=None, thresh=0.3, min_valid=0.15, batch=12, chip
                 .permute(2, 0, 1).float().div(255) for x, y in chunk]
         outs = model(imgs)
         for (x0, y0), out in zip(chunk, outs):
-            if not len(out["scores"]):
+            n_out = len(out["scores"])
+            if not n_out:
                 continue
-            s = float(out["scores"][0])
-            if s < thresh:
-                continue
-            kp = out["keypoints"][0].numpy()[:, :2] + np.array([x0, y0])
-            dets.append((s, kp))
+            # top1=True keeps only the window's best detection, which structurally caps the
+            # scene at one truck per window and is the historical behaviour. top1=False keeps
+            # every detection above threshold, so two trucks in one window can both be
+            # reported; cross-window duplicates are still handled by dedup below.
+            kss = out["keypoints_scores"].numpy() if "keypoints_scores" in out else None
+            for j in (range(1) if top1 else range(n_out)):
+                s = float(out["scores"][j])
+                if s < thresh:
+                    break                      # scores are descending, so the rest are lower
+                # The keypoint head reports how sharply it localised each band. That separates
+                # real echoes from echo-like ground far better than the box score does
+                # (AUC 0.891 vs 0.771), and the pipeline used to discard it. The scale is a raw
+                # logit, uncalibrated and PER MODEL, so it must be tuned per model, never fixed.
+                if kp_gate is not None and kss is not None and float(kss[j].mean()) <= kp_gate:
+                    continue
+                kp = out["keypoints"][j].numpy()[:, :2] + np.array([x0, y0])
+                dets.append((s, kp))
 
     # dedupe overlapping windows: greedy by score, suppress reds within dedup_px.
     # Deliberately NOT tied to the window size — otherwise changing the window would silently
@@ -363,6 +381,9 @@ def detect(model, scene, stride=None, thresh=0.3, min_valid=0.15, batch=12, chip
         "chip_px": chip,
         "chip_m": round(chip * 3.0),
         "dedup_px": dedup_px,
+        "top1": top1,
+        "kp_gate": kp_gate,
+        "nms": model.roi_heads.nms_thresh,
         "resized_to": chip * UPSCALE,
         "count": len(kept),
         "detections": recs,
@@ -373,11 +394,13 @@ def detect(model, scene, stride=None, thresh=0.3, min_valid=0.15, batch=12, chip
     }
 
 
-def main(scene, stride, thresh, min_valid, batch, weights, anchors, chip, dedup_px):
+def main(scene, stride, thresh, min_valid, batch, weights, anchors, chip, dedup_px, all_dets,
+         kp_gate, nms):
     model = load_model(weights, anchors)
     print(f"weights: {(Path(weights) if weights else WEIGHTS)}  (anchors={anchors})")
     result = detect(model, scene, stride=stride, thresh=thresh,
-                    min_valid=min_valid, batch=batch, chip=chip, dedup_px=dedup_px)
+                    min_valid=min_valid, batch=batch, chip=chip, dedup_px=dedup_px,
+                    top1=not all_dets, kp_gate=kp_gate, nms=nms)
     print(f"-> {result['count']} detections; montage outputs/{result['montage']}")
 
 
@@ -389,6 +412,15 @@ if __name__ == "__main__":
     ap.add_argument("--chip", type=int, default=CHIP,
                     help="sliding-window size in px; resized to chip*3 so the echo keeps the "
                          "scale the weights were trained at (64 px = 192 m across)")
+    ap.add_argument("--kp-gate", dest="kp_gate", type=float, default=None,
+                    help="drop detections whose mean keypoint score is <= this. Raw logit, tune "
+                         "PER MODEL (adamiak-v2 ~8.0, warmup-v1 ~3.5). Default off")
+    ap.add_argument("--nms", type=float, default=None,
+                    help="ROI NMS IoU inside each window (default 0.5). Raise toward 0.9 to let "
+                         "two nearby trucks in one window both survive")
+    ap.add_argument("--all-dets", dest="all_dets", action="store_true",
+                    help="keep EVERY detection above threshold in each window, not just the best. "
+                         "Without this a window can never report two trucks")
     ap.add_argument("--dedup-px", dest="dedup_px", type=float, default=DEDUP_PX,
                     help="duplicate-suppression radius in px (32 = 96 m). Not tied to --chip")
     ap.add_argument("--thresh", type=float, default=0.3)
