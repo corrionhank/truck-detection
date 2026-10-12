@@ -5,6 +5,13 @@ Running log of what changed and what we learned. Newest first. For the current d
 
 ---
 
+## 2026-10-12 — §B5: roads from TIGER, median speed
+
+- §B5 "Inputs as chosen" now describes corridor-counts' TIGER-based `density.py`: the longest road in the scene
+  from Census TIGER centrelines (route-grouped, aliases merged, divided highways counted once; 58 of 68 captures
+  within 5% of WSDOT section lengths), median streak speed, counters matched within 150 m of the road, and the
+  new results (33% of real trucks for nojitter-v1, dispersion 5.1).
+
 ## 2026-10-09 — §B5: the density method's inputs as chosen
 
 - **`docs/COUNT_MODEL_SPEC.md` §B5 → "Inputs as chosen"** records how corridor-counts' `scripts/density.py` builds

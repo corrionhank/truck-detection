@@ -261,26 +261,26 @@ with counter bins from `corridor-counts/scripts/counters.py`.
 Steps 1–4 are the measurement; one pair is noisy on its own (step 6 gives the floor). The conversion is a
 property of the collection, and its form is fitted, not assumed.
 
-### Inputs as chosen — `corridor-counts/scripts/density.py` (2026-10-08)
+### Inputs as chosen — `corridor-counts/scripts/density.py` (2026-10-08, roads from TIGER 2026-10-12)
 
 The pairs are built by `scripts/density.py`, run by every harvest after `calibrate.py`, which writes one row
-per capture × source × road × direction to `frontend/public/data/density.json` and shows them in the study
-report's **Density method** table. The four inputs the procedure leaves open are fixed as:
+per capture × source × direction to `frontend/public/data/density.json` and shows them in the study report's
+**Density method** table. The inputs the procedure leaves open are fixed as:
 
 | Input | Chosen | Detail |
 |---|---|---|
-| Road length `L` | **Whole road in the scene** | Every WSDOT section of that route inside the capture footprint, summed. A spur, couplet or reversible lanes (`related_type` SP / CO / RL) is a separate road from the mainline. Divided highways are one centreline, so `L` serves both directions. |
-| Speed `v` | **Streak speed, counter fallback** | Mean streak of the direction's detections ÷ the source's fitted band delay (`calibration.json`); the in-scene counters' speed (harmonic mean of the bin's speed classes) when the direction has fewer than 3 detections; the streak speed of 1–2 detections if there is no counter either. |
-| Counters | **Average of all on that road in the scene** | Every permanent counter on the same route and roadway whose site falls inside the footprint, this direction; their 15-minute counts and speeds are averaged. A counter joins its road by the route number in its description ("On SR 005"). |
+| Road `r*` | **The longest road in the scene** | Census TIGER/Line primary and secondary roads (MTFCC S1100/S1200; no ramps or local streets) inside the capture footprint, which is the AOI clipped to the capture. Grouped by route (TIGER route type + number: "I- 90", "US Hwy 97 N", "State Hwy 16" → I-90, US-97, SR-16); a road with 80% of its length within 8 m of another's (a street name over a route, a concurrent route) is merged into it. Users are told to draw one road, or several of similar length, so the longest stands for the scene. |
+| Road length `L` | **r*'s centreline in the scene** | TIGER draws a divided highway as one line per direction: the share of r*'s length with a parallel line of the same road 4–300 m to the side is counted once, `L = total × (1 − divided share / 2)`. Checked against WSDOT section lengths: 58 of 68 usable captures within 5%; the rest are concurrent routes WSDOT files under another number (I-182 for US 12 in Tri-Cities), where TIGER's length is the physical road. |
+| Speed `v` | **Median streak speed** | Per direction, the median of `streak / Δt × 3.6` over r*'s detections (Δt: the source's fitted band delay, `calibration.json`), keeping 8–160 km/h; the mean is recorded beside it. The counters' speed (harmonic mean of the bin's speed classes) when the direction has fewer than 3 detections. |
+| Counters | **Every counter near r*, averaged** | Counter sites inside the footprint within 150 m of r*'s lines, this direction. Matched by distance, not route number, because of concurrent routes. |
 | 15-minute bin | **The bin the capture falls in** | Pacific time; a counter enters only if that bin is Accepted and not a glitch. |
+| Detections `n` | **On r*, by local direction** | The source's detections within 60 m of r*; each joins the direction its compass heading agrees with at r*'s nearest point, so a road that bends keeps two directions. |
 
-Then, per row: scene time `T = L / v`; true count `λ = V₁₅ × T / 15 min`; true trucks `= λ × τ`, with `τ` the
-road's WSDOT 2024 truck share km-weighted over its sections in the scene; and the ratio `n / (λ τ)`. The
-direction pair (NB/SB or EB/WB) is chosen once per road — from its counters' direction labels, or, with no
-counter, from the road's overall orientation (length-weighted, on doubled angles) — and each detection joins
-whichever of the pair its compass heading is nearer. Rows are kept for every road holding a detection or a
-counter; a row without a true count says why (`no counter on this road in the scene`, `no counter data for
-this capture's bin`, `counter bin not Accepted / glitch`).
+Then, per row: scene time `T = 60 · L / v`; real count `λ = V₁₅ × T / 15 min`; real trucks `= λ × τ`, with `τ`
+the WSDOT 2024 truck share km-weighted over the traffic sections along r*; and the ratio `n / (λ τ)`. The
+direction labels (NB/SB or EB/WB) come from r*'s counters, or from its overall orientation. A row without a real
+count says why. The road tables are cached per footprint (`scripts/.density-cache.json`), so TIGER is re-read
+only for new captures.
 
 **How it relates to `calibrate.py`.** `calibrate.py` (steps 1–2 below, and the Results table) keeps a
 narrower definition — only the counter's own traffic stream (route sections within 3 km whose AADT is within
@@ -288,23 +288,22 @@ narrower definition — only the counter's own traffic stream (route sections wi
 to fit the band delay Δt without leaning on the detections' own speed. `density.py` uses that Δt and builds the
 pairs with the inputs above.
 
-**What the chosen inputs give (density.json, 2026-10-08).** 375 rows, 98 with a true count (the rest are
+**What the chosen inputs give (density.json, 2026-10-12).** 229 rows, 66 with a real count (the rest are
 mostly captures after the counter data ends, 2026-05-27).
 
-| Source | Paired rows | Capture-roads | Detections ÷ true trucks | ÷ true count (all vehicles) | Dispersion `φ` |
-|---|---|---|---|---|---|
-| hand labels | 26 | 13 | 24% | 2.5% | 4.1 |
-| adamiak-v2 | 26 | 13 | 26% | 2.7% | 7.7 |
-| warmup-v1 | 26 | 13 | 34% | 3.5% | 4.0 |
-| nojitter-v1 | 14 | 7 | 33% | 3.7% | 3.9 |
-| nojitter-v1 @ 24 px | 6 | 3 | 38% | 4.5% | 1.6 |
+| Source | Pairs | Detections ÷ real trucks | ÷ real count (all vehicles) | Dispersion `φ` |
+|---|---|---|---|---|
+| hand labels | 18 | 25% | 2.7% | 4.4 |
+| adamiak-v2 | 18 | 27% | 2.9% | 9.3 |
+| warmup-v1 | 18 | 36% | 3.8% | 4.4 |
+| nojitter-v1 | 8 | 33% | 4.0% | 5.1 |
+| nojitter-v1 @ 24 px | 4 | 37% | 5.4% | 1.2 |
 
-Against the counter's own stretch (`calibrate.py`) the same sources find 43–55% of trucks with `φ` ≈ 1. With
-the whole road and every in-scene counter averaged, the share is lower and the pairs do **not** agree within
-counting noise (`φ` 1.6–7.7). The likely reason, not yet checked: the whole road runs through interchanges
-where traffic differs from the counters', and averaging counters across those changes pairs one road's
-detections with a flow measured elsewhere on it. Comparing the two definitions row by row on the same
-captures — or a per-section variant that uses each section's nearest same-stream counter — would test that.
+On the counter's own stretch (`calibrate.py`) the same sources find 43–55% of trucks with `φ` ≈ 1. On the
+longest road, with every nearby counter averaged, the share is lower and the pairs do not agree within counting
+noise (`φ` 4–9 except the 4-pair 24 px source). The two directions of one capture can differ by 2× (Blaine–
+Bellingham I-5: 19% NB, 40% SB). Likely causes, not yet checked: traffic changes along a 20–35 km road between
+interchanges, and counter speed bins and truck shares that are assumed (see Assumptions).
 
 ### Terms (one direction of travel, one capture, one counter)
 
