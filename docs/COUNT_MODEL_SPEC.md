@@ -181,6 +181,10 @@ q      = k × v̄                                 # veh per hour
 with `L_obs` in km and `v̄` the space-mean speed in km/h. Do this **per direction** where the road geometry
 allows separating them, because expansion factors are directional.
 
+> **Superseded for counting by B5 (2026-10-08).** `precision / recall` is measured against an easy-echo label
+> subset (C1, C2) and has unknown sign of error. B5 replaces it with a detection share fitted directly against
+> permanent-counter volumes, which absorbs C1, C2 and C7 at the densities sampled.
+
 Worked, with the numbers we actually have for `Tacoma-Centralia_01`:
 
 | Term | Value | Source |
@@ -216,7 +220,7 @@ detector also fires on.
 **Tier 0 (available today):** posted speed limit from the WSDOT speed-limit layer, joined to the road segment.
 Biases high in congestion, but congestion is largely invisible anyway (see C5).
 
-**Tier 1 (the real answer, not yet built):** the echo *is* a speed measurement.
+**Tier 1 (the real answer — built 2026-10-08, see B5):** the echo *is* a speed measurement.
 
 ```
 Δt = (w_bands · d_GSD) / v_sat                      # Adamiak 2025 Eq. 3-4; seconds
@@ -230,6 +234,241 @@ Van Etten's ~800 ms green–blue delta is an order-of-magnitude cross-check only
 
 This gives **per-vehicle speed**, so `v̄` is a genuine space-mean speed over the detections rather than an
 assumption — and speed is itself a deliverable WSDOT would value.
+
+**As built, Δt is fitted, not derived.** The ephemeris route above was never needed: the permanent counters
+report speed, so Δt is solved from them (B5, step 2). Fitted blue→green offset: **1.17–1.21 s** for every source,
+hand labels included (1.20 s). Van Etten's ~0.8 s is ruled out — it would put free-flow traffic at ~100 mph.
+The equation above remains the physical cross-check if the sidecars are ever recovered.
+
+## B5. Density method: scene time × the 15-minute count
+
+How a capture is set against a counter, pair by pair, so that the pairs can later be fitted into a general
+conversion from detections to vehicles per unit time (and, through Part D, AADT). Implemented in
+`corridor-counts/scripts/calibrate.py` (run by every harvest; writes `frontend/public/data/calibration.json`),
+with counter bins from `corridor-counts/scripts/counters.py`.
+
+**The procedure.**
+
+1. **How much time the scene covers.** Road length in the capture ÷ speed = how long a vehicle takes to cross
+   the captured stretch. That is the slice of time the scene stands for.
+2. **How many detections are in the scene** — on that road, in that direction.
+3. **The real count.** The counter's 15-minute count for the same direction around the capture.
+4. **The vehicle estimate.** `(15 min, V₁₅ vehicles) × (scene time ÷ 15 min)` = the vehicles the counter says
+   should be within the scene over that time range — the counter's estimate of the number of points the scene holds.
+5. **Save the pair** (detections, vehicle estimate), for every capture × counter × direction.
+6. **Fit the collection** into a generalisable conversion from detections to vehicles per unit time.
+
+Steps 1–4 are the measurement; one pair is noisy on its own (step 6 gives the floor). The conversion is a
+property of the collection, and its form is fitted, not assumed.
+
+### Inputs as chosen — `corridor-counts/scripts/density.py` (2026-10-08)
+
+The pairs are built by `scripts/density.py`, run by every harvest after `calibrate.py`, which writes one row
+per capture × source × road × direction to `frontend/public/data/density.json` and shows them in the study
+report's **Density method** table. The four inputs the procedure leaves open are fixed as:
+
+| Input | Chosen | Detail |
+|---|---|---|
+| Road length `L` | **Whole road in the scene** | Every WSDOT section of that route inside the capture footprint, summed. A spur, couplet or reversible lanes (`related_type` SP / CO / RL) is a separate road from the mainline. Divided highways are one centreline, so `L` serves both directions. |
+| Speed `v` | **Streak speed, counter fallback** | Mean streak of the direction's detections ÷ the source's fitted band delay (`calibration.json`); the in-scene counters' speed (harmonic mean of the bin's speed classes) when the direction has fewer than 3 detections; the streak speed of 1–2 detections if there is no counter either. |
+| Counters | **Average of all on that road in the scene** | Every permanent counter on the same route and roadway whose site falls inside the footprint, this direction; their 15-minute counts and speeds are averaged. A counter joins its road by the route number in its description ("On SR 005"). |
+| 15-minute bin | **The bin the capture falls in** | Pacific time; a counter enters only if that bin is Accepted and not a glitch. |
+
+Then, per row: scene time `T = L / v`; true count `λ = V₁₅ × T / 15 min`; true trucks `= λ × τ`, with `τ` the
+road's WSDOT 2024 truck share km-weighted over its sections in the scene; and the ratio `n / (λ τ)`. The
+direction pair (NB/SB or EB/WB) is chosen once per road — from its counters' direction labels, or, with no
+counter, from the road's overall orientation (length-weighted, on doubled angles) — and each detection joins
+whichever of the pair its compass heading is nearer. Rows are kept for every road holding a detection or a
+counter; a row without a true count says why (`no counter on this road in the scene`, `no counter data for
+this capture's bin`, `counter bin not Accepted / glitch`).
+
+**How it relates to `calibrate.py`.** `calibrate.py` (steps 1–2 below, and the Results table) keeps a
+narrower definition — only the counter's own traffic stream (route sections within 3 km whose AADT is within
+25% of the site section's), the counter's speed, and a 30-minute overlap-weighted window — because its job is
+to fit the band delay Δt without leaning on the detections' own speed. `density.py` uses that Δt and builds the
+pairs with the inputs above.
+
+**What the chosen inputs give (density.json, 2026-10-08).** 375 rows, 98 with a true count (the rest are
+mostly captures after the counter data ends, 2026-05-27).
+
+| Source | Paired rows | Capture-roads | Detections ÷ true trucks | ÷ true count (all vehicles) | Dispersion `φ` |
+|---|---|---|---|---|---|
+| hand labels | 26 | 13 | 24% | 2.5% | 4.1 |
+| adamiak-v2 | 26 | 13 | 26% | 2.7% | 7.7 |
+| warmup-v1 | 26 | 13 | 34% | 3.5% | 4.0 |
+| nojitter-v1 | 14 | 7 | 33% | 3.7% | 3.9 |
+| nojitter-v1 @ 24 px | 6 | 3 | 38% | 4.5% | 1.6 |
+
+Against the counter's own stretch (`calibrate.py`) the same sources find 43–55% of trucks with `φ` ≈ 1. With
+the whole road and every in-scene counter averaged, the share is lower and the pairs do **not** agree within
+counting noise (`φ` 1.6–7.7). The likely reason, not yet checked: the whole road runs through interchanges
+where traffic differs from the counters', and averaging counters across those changes pairs one road's
+detections with a flow measured elsewhere on it. Comparing the two definitions row by row on the same
+captures — or a per-section variant that uses each section's nearest same-stream counter — would test that.
+
+### Terms (one direction of travel, one capture, one counter)
+
+| Symbol | Meaning | Units | From |
+|---|---|---|---|
+| `L` | road length of the stretch inside the capture footprint | km | WSDOT section centrelines ∩ footprint |
+| `n` | detections on the stretch heading in this direction | veh | `detections.json` |
+| `s̄` | mean blue→green streak of those detections | m | keypoints |
+| `Δt` | blue→green band time offset | s | fitted, step 2 |
+| `v̄` | space-mean speed, `s̄ / Δt` (or the counter's, when fitting) | km/h | |
+| `T` | residence time, `L / v̄` | min | |
+| `V₁₅` | counter volume in a 15-minute bin, this direction | veh / 15 min | `continuousSpeed15min.parquet` |
+| `τ` | truck share of the stretch (WSDOT 2024 annual, km-weighted) | — | `segments.geojson` |
+| `λ` | the counter's vehicle estimate for the scene, `V₁₅ × T / 15 min` | veh | step 3 |
+| `p` | share of vehicles (or `p_τ`: of trucks) the source detects — the first-pass conversion | — | fitted, step 5 |
+
+### 1. The stretch and the direction (`calibrate.py`; `density.py` uses the whole road — see above)
+
+- **Stretch:** sections of the counter's route within 3 km of the site whose AADT is within 25% of the site
+  section's — one traffic stream, no major interchange between — counted only inside the footprint (`L ≥ 0.5 km`).
+- **Direction:** each detection joins whichever of the counter's two directions (NB/SB or EB/WB) is nearer its
+  **compass heading** (true north, from the keypoints; the collector's `bearing_deg` is a math angle and is not
+  used — see the CC CHANGELOG, 2026-10-08).
+
+### 2. Speed: fit Δt
+
+A snapshot's mean speed over the vehicles on a stretch is the **space-mean speed** — the same quantity a
+counter's **harmonic mean** of spot speeds estimates. So for each pair `Δt_i = s̄_i / v_counter,i`, pooled
+detection-weighted across pairs:
+
+```
+Δt̂ = Σ nᵢ s̄ᵢ / Σ nᵢ v_counter,i          # s
+v̂  = s̄ / Δt̂                              # m/s, per vehicle or per direction
+```
+
+### 3. Scene time → the counter's vehicle estimate for the scene
+
+```
+T  = L / v̄                                   # minutes the scene covers: the time to cross the stretch
+λ  = V₁₅ × (T / 15 min)                      # the 15-min count × the fraction of it the scene covers
+   = q × L / v̄ = k_counter × L               # identical to q = k·v (B1), with q = 4·V₁₅ veh/h
+```
+
+`λ` is what the counter says the scene should hold; `n` is what the source found in it. `λ` is a **best
+estimate at the granularity of the data** — a 15-minute rate spread over a few minutes of scene time — not an
+observed count of the vehicles in the image; finer counter data (per-vehicle or 1-minute) would tighten it. Fitting, `v̄` is the
+counter's speed (so the comparison does not lean on a Δt being fitted from the same pairs); applying the
+conversion where there is no counter, it is the streak speed `v̂`.
+
+The counter side is not a single bin: `V₁₅` is the **overlap-weighted mean of the bins covering a window of
+length `max(30 min, T)` centred on the capture** (the two bins either side of the capture's are kept for this),
+and a pair is used only if every bin it touches is Accepted and not a glitch. Speeds in the window are combined
+as a volume-weighted harmonic mean. With `T` ≈ 1–11 min in the data, the 30-minute floor is what usually binds.
+
+### 4. Save every pair
+
+With the chosen inputs, the pairs are the rows of `density.json` (above). `calibrate.py` keeps its own set for
+the Δt fit: each usable capture × counter × direction is one row of `calibration.json` → `pairs`: the stretch (sections,
+`L`), `n`, mean heading and streak, the scene time `T`, the counter window and the bins it used, `q`, the
+counter's speed, `k_counter`, `τ`, and the per-pair ratio and Δt. Every harvest recomputes all of them from the
+current detections and counter data, so a new capture over a counter, or new counter data from WSDOT, adds pairs
+without anything being run by hand. A pair enters a fit only if every counter bin it touches is Accepted (not a
+glitch) and it holds at least 3 detections.
+
+### 5. Fit the collection
+
+The general conversion is `n = f(λ)` (or `f(τ λ)` against trucks), fitted over all saved pairs. Its form is
+open; the first pass is the simplest model with a physical reading.
+
+With random arrivals and a stationary stream over the window, the number of vehicles actually on the stretch is
+**Poisson(λ)**. Each one is detected independently with probability `p` (a thinning), so
+
+```
+N ~ Poisson(λ)        n | N ~ Binomial(N, p)        ⇒   n ~ Poisson(p λ)
+trucks only:                                            n ~ Poisson(p_τ τ λ)
+```
+
+The maximum-likelihood share across `m` direction-pairs is the ratio of totals:
+
+```
+p̂   = Σ nᵢ / Σ λᵢ
+p̂_τ = Σ nᵢ / Σ τᵢ λᵢ
+```
+
+**Goodness of fit** is the Pearson dispersion `φ = Σ (nᵢ − p̂ λᵢ)² / (p̂ λᵢ) / (m − 1)`. `φ ≈ 1` means the
+scatter between sites is Poisson counting noise and one `p` fits all of them; `φ > 1` means real site-to-site
+variation the model does not explain, and the distribution should become a negative binomial (Gamma-Poisson)
+with that extra variance.
+
+**What could change the form.** Proportional `f` holds only while the detector's share does not depend on
+density. C3–C5 say it will at high density (dedup ceiling, window saturation, stopped traffic leaving no echo), so
+as pairs accumulate over a wider range of `λ`, a concave `f` (share falling with density) is the expected next
+candidate, chosen by the same dispersion test and by leave-one-site-out error.
+
+### 6. Use the fitted conversion: a capture → vehicles per unit time
+
+With the first-pass (proportional) conversion; a refitted `f` replaces the first line with `λ̂ = f⁻¹(n)`.
+
+```
+λ̂    = n / (p̂_τ τ)                        # vehicles in the scene over its time range (all classes)
+V̂₁₅  = λ̂ × 15 min / T̂,   T̂ = L / v̂       # the 15-minute count it implies
+q̂    = 4 V̂₁₅ = λ̂ v̂ / L                    # veh/h
+AADT ≈ q̂ × f_hour × f_dow × f_season      # Part D, factors from the nearest counter
+```
+
+Uncertainty comes first from `n` itself — use the exact (Garwood) Poisson interval on `n` and carry it through:
+
+| n | 95% interval on n | relative |
+|---|---|---|
+| 5 | 1.6 – 11.7 | −68% / +133% |
+| 10 | 4.8 – 18.4 | −52% / +84% |
+| 23 | 14.6 – 34.5 | −37% / +50% |
+| 100 | 81.4 – 121.6 | −19% / +22% |
+
+A single capture of a short stretch cannot beat that floor; more captures, longer stretches and both directions
+pooled are how the interval narrows.
+
+### Worked: I-5 NB at Tumwater (R097S), Tacoma-Centralia_01, 2026-04-29 12:41 PT, nojitter-v1
+
+| Step | Value |
+|---|---|
+| Stretch | 5 sections, `L` = 12.57 km inside the footprint |
+| Detections NB | `n` = 23, `s̄` = 33.97 m, mean heading 18° |
+| Counter window | 12:26–12:56 (bins 12:15, 12:30, 12:45): `q` = 2,366 veh/h → `V₁₅` = 591.5; `v` = 111.2 km/h |
+| Scene time | `T` = 12.57 / 111.2 h = **6.8 min**, 45% of a 15-min bin |
+| Vehicle estimate | `λ` = 591.5 × 0.452 = **267 vehicles** in the scene over that time; trucks at `τ` = 15.3%: 40.9 |
+| The saved pair | (23 detected, 267 estimated) → 23 / 40.9 = 56% of trucks (all pairs pooled: `p̂_τ` = 0.536) |
+| Speed | `v̂` = 33.97 m / 1.171 s = **104 km/h** vs 111 counter (left out: 102, −8%) |
+| Flow, this site left out of the fit | **2,318 veh/h** vs 2,366 counted (−2%) |
+
+### Results (calibration.json, 2026-10-08)
+
+68 usable direction-pairs at 14 sites; counter data runs through **2026-05-27**, so no capture after that pairs.
+
+| Source | Δt̂ (s) | per-pair range | `p̂` all | `φ` all | `p̂_τ` trucks | `φ` trucks | left-out \|v err\| | left-out \|q err\| via `τ` |
+|---|---|---|---|---|---|---|---|---|
+| hand labels | 1.202 | 0.89–1.45 | 0.053 | 1.71 | 0.478 | 1.16 | 10.5% | 40.8% |
+| adamiak-v2 | 1.091 | 0.93–1.34 | 0.066 | 1.78 | 0.547 | 0.98 | 9.3% | 32.1% |
+| warmup-v1 | 1.198 | 1.02–1.57 | 0.045 | 3.65 | 0.453 | 1.48 | 7.7% | 43.3% |
+| nojitter-v1 | 1.171 | 0.97–1.43 | 0.054 | 2.32 | 0.536 | 1.04 | 13.7% | 47.4% |
+| nojitter-v1 @ 24 px | 1.209 | 1.11–1.36 | 0.051 | 1.73 | 0.427 | 0.91 | 8.4% | 25.8% |
+
+"Left-out" errors are leave-one-site-out medians: `Δt` and `p` refitted without the site, then the site
+predicted — what a road with no counter would see.
+
+**Reading it (first-pass fit; the form is not settled).**
+- **Δt is a sensor constant** and every source agrees on it (1.09–1.21 s).
+- **As a share of all vehicles, the pairs do not agree** (`φ` 1.7–3.7): the share found depends on the site.
+  **As a share of trucks, they do** (`φ` 0.9–1.2 for every source but warmup-v1): sources find **about half the
+  trucks**, and what is left between pairs is counting noise. So far the detector counts trucks, and `τ` is what
+  carries a truck count to total traffic.
+- **The flow error is the Poisson floor**, not the model: pairs hold 3–23 detections, and the table in step 6 puts
+  a single pair at ±40–100% before any modelling error. More pairs — and pairs over a wider range of density —
+  are what settle the form of `f`.
+
+### Assumptions to keep in view
+
+- Counter speed-bin edges are **assumed** (WSDOT has not confirmed them; `counters.py` `EDGES`), and the
+  harmonic mean is sensitive to the open-ended bottom bin in congestion.
+- `τ` is **annual**, not midday; `p_τ` absorbs the difference only while it is similar between sites.
+- Stationarity over the window and no on/off-ramp exchange inside the stretch (the AADT tolerance is the guard).
+- `p` is fitted over counter densities of **3.7–48 veh/km per direction**. It does not transfer outside that
+  range, because C3–C5 are nonlinear: the current operating point (nojitter-v1: dedup 8 px = 24 m, all
+  detections per window) lowers but does not remove the density ceiling, and congested traffic leaves no echo.
 
 ---
 
@@ -345,7 +584,8 @@ steps, never one**, or you confound detection error with expansion error:
 
 **Step 1 — detection + density→flow.** For each scene, find counters inside the valid footprint. Pull the
 counter's **raw volume in the hour of capture** (not its AADT). Compare to satellite `q`. This tests A6, B2, B3,
-B4 and the whole of Part C, with zero expansion assumptions.
+B4 and the whole of Part C, with zero expansion assumptions. *Built as B5, at 15-minute rather than hourly
+resolution, with leave-one-site-out validation.*
 
 **Step 2 — expansion.** Take the Step 1 output and apply Part D. Compare to the counter's published AADT. This
 tests only the factors.

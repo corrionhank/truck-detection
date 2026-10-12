@@ -5,6 +5,29 @@ Running log of what changed and what we learned. Newest first. For the current d
 
 ---
 
+## 2026-10-09 — §B5: the density method's inputs as chosen
+
+- **`docs/COUNT_MODEL_SPEC.md` §B5 → "Inputs as chosen"** records how corridor-counts' `scripts/density.py` builds
+  the pairs: whole road in the scene for the road length; streak speed with a counter fallback under 3
+  detections; the average of every counter on that road in the scene; the 15-minute bin the capture falls in.
+  It states how that differs from `calibrate.py` (the counter's own stretch, counter speed, a 30-minute window,
+  kept for the Δt fit), and what the chosen inputs give so far: 24–38% of true trucks by source, dispersion
+  1.6–7.7, against 43–55% and ≈ 1 on the counter's own stretch. §B5 is retitled "Density method"; steps 1 and 4
+  point to the new subsection.
+
+## 2026-10-08 — Counting method written up (COUNT_MODEL_SPEC §B5)
+
+- **`docs/COUNT_MODEL_SPEC.md` §B5** formally defines the counter-anchored counting method built in
+  corridor-counts (`scripts/calibrate.py`) as a measure → save → fit procedure: the time a scene covers
+  (`T = L / v̄`), the detections in it, the counter's 15-minute count × `T / 15 min` as the vehicle estimate for
+  the scene, every pair saved (`calibration.json` → `pairs`), and the collection fitted into a general conversion
+  `n = f(λ)`. First-pass `f` is a Poisson thinning `n ~ Poisson(p τ λ)` with the MLE share and Pearson dispersion
+  as the goodness-of-fit; the form is left open for when pairs span more density. Plus the inversion from a
+  capture to a 15-minute count / AADT, and the exact Poisson interval that bounds a single pair. Worked example (I-5 NB, Tumwater) and the fitted results:
+  Δt = 1.09–1.21 s for every source; about half the trucks found, with between-site scatter at the Poisson level.
+- §B4 Tier 1 is marked built (Δt fitted against counter speeds rather than derived from ephemeris); §B2's
+  precision/recall correction is marked superseded for counting; Part E Step 1 points to §B5.
+
 ## 2026-08-13 — Inference-record collection, results report, and a post-processing finding
 
 - **New `src/collect_inference.py`** — one pass per scene at threshold 0 recording **every** detection (not just
