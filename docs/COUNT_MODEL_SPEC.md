@@ -252,7 +252,8 @@ with counter bins from `corridor-counts/scripts/counters.py`.
 1. **How much time the scene covers.** Road length in the capture ÷ speed = how long a vehicle takes to cross
    the captured stretch. That is the slice of time the scene stands for.
 2. **How many detections are in the scene** — on that road, in that direction.
-3. **The real count.** The counter's 15-minute count for the same direction around the capture.
+3. **The real count.** The 15-minute count for the same direction around the capture: the counter's reading
+   or, until the counter data covers the imagery, the road's AADT spread over a typical day (inputs below).
 4. **The vehicle estimate.** `(15 min, V₁₅ vehicles) × (scene time ÷ 15 min)` = the vehicles the counter says
    should be within the scene over that time range — the counter's estimate of the number of points the scene holds.
 5. **Save the pair** (detections, vehicle estimate), for every capture × counter × direction.
@@ -261,7 +262,7 @@ with counter bins from `corridor-counts/scripts/counters.py`.
 Steps 1–4 are the measurement; one pair is noisy on its own (step 6 gives the floor). The conversion is a
 property of the collection, and its form is fitted, not assumed.
 
-### Inputs as chosen — `corridor-counts/scripts/density.py` (2026-10-08, roads from TIGER 2026-10-12)
+### Inputs as chosen — `corridor-counts/scripts/density.py` (2026-10-08, roads from TIGER 2026-10-12, 15-min count from AADT 2026-10-13)
 
 The pairs are built by `scripts/density.py`, run by every harvest after `calibrate.py`, which writes one row
 per capture × source × direction to `frontend/public/data/density.json` and shows them in the study report's
@@ -271,13 +272,14 @@ per capture × source × direction to `frontend/public/data/density.json` and sh
 |---|---|---|
 | Road `r*` | **The longest road in the scene** | Census TIGER/Line primary and secondary roads (MTFCC S1100/S1200; no ramps or local streets) inside the capture footprint, which is the AOI clipped to the capture. Grouped by route (TIGER route type + number: "I- 90", "US Hwy 97 N", "State Hwy 16" → I-90, US-97, SR-16); a road with 80% of its length within 8 m of another's (a street name over a route, a concurrent route) is merged into it. Users are told to draw one road, or several of similar length, so the longest stands for the scene. |
 | Road length `L` | **r*'s centreline in the scene** | TIGER draws a divided highway as one line per direction: the share of r*'s length with a parallel line of the same road 4–300 m to the side is counted once, `L = total × (1 − divided share / 2)`. Checked against WSDOT section lengths: 58 of 68 usable captures within 5%; the rest are concurrent routes WSDOT files under another number (I-182 for US 12 in Tri-Cities), where TIGER's length is the physical road. |
-| Speed `v` | **Median streak speed** | Per direction, the median of `streak / Δt × 3.6` over r*'s detections (Δt: the source's fitted band delay, `calibration.json`), keeping 8–160 km/h; the mean is recorded beside it. The counters' speed (harmonic mean of the bin's speed classes) when the direction has fewer than 3 detections. |
-| Counters | **Every counter near r*, averaged** | Counter sites inside the footprint within 150 m of r*'s lines, this direction. Matched by distance, not route number, because of concurrent routes. |
-| 15-minute bin | **The bin the capture falls in** | Pacific time; a counter enters only if that bin is Accepted and not a glitch. |
+| Speed `v` | **Median streak speed** | Per direction, the median of `streak / Δt × 3.6` over r*'s detections (Δt: the source's fitted band delay, `calibration.json`), keeping 8–160 km/h; the mean is recorded beside it. The counters' speed (harmonic mean of the bin's speed classes) when the direction has fewer than 3 detections; r*'s posted limit (km-weighted over its WSDOT sections) when it has none and there is no counter. |
+| 15-minute count `V₁₅` | **From AADT** (since 2026-10-13) | `V₁₅ = AADT / 2 × s(bin, day)`. AADT is r*'s WSDOT AADT (2024, two-way), km-weighted over the traffic sections whose midpoint is within 60 m of r*. `s` is the share of a day's traffic in the capture's 15-minute bin (Pacific), weekday or weekend: the median over every counter direction's profile (`counters.py`, complete days only; 312 directions). Midday shares are 1.50–1.67% per 15 minutes on weekdays and 1.83–2.08% on weekends. Bins outside 11:00–12:45 split the hour's share evenly. Day-of-week and month factors were tried and left out, because they made the match to counter readings worse (median 11% against 8%). The counter data ends 2026-05-27, before most of the imagery, so AADT is the base until it is extended. |
+| Counter check | **Every counter near r*, averaged** | Where counter sites inside the footprint within 150 m of r*'s lines have the capture's bin (Accepted, not a glitch) for this direction, their mean reading runs the same chain beside the AADT figure (`counter_*` fields). Matched by distance, not route number, because of concurrent routes. |
 | Detections `n` | **On r*, by local direction** | The source's detections within 60 m of r*; each joins the direction its compass heading agrees with at r*'s nearest point, so a road that bends keeps two directions. |
 
 Then, per row: scene time `T = 60 · L / v`; real count `λ = V₁₅ × T / 15 min`; real trucks `= λ × τ`, with `τ`
-the WSDOT 2024 truck share km-weighted over the traffic sections along r*; and the ratio `n / (λ τ)`. The
+the WSDOT 2024 truck share km-weighted over the traffic sections along r*; and the ratio `n / (λ τ)`. Both
+directions get a row on every capture a source ran on, so a direction with no detections is a pair (0 found). The
 direction labels (NB/SB or EB/WB) come from r*'s counters, or from its overall orientation. A row without a real
 count says why. The road tables are cached per footprint (`scripts/.density-cache.json`), so TIGER is re-read
 only for new captures.
@@ -288,22 +290,32 @@ narrower definition — only the counter's own traffic stream (route sections wi
 to fit the band delay Δt without leaning on the detections' own speed. `density.py` uses that Δt and builds the
 pairs with the inputs above.
 
-**What the chosen inputs give (density.json, 2026-10-12).** 229 rows, 66 with a real count (the rest are
-mostly captures after the counter data ends, 2026-05-27).
+**What the chosen inputs give (density.json, 2026-10-13).** 236 rows, 230 with a real count from AADT on 50
+captures. Ellensburg_01 is the exception: no WSDOT truck share on its I-90 sections. 66 rows also have a
+counter reading.
 
-| Source | Pairs | Detections ÷ real trucks | ÷ real count (all vehicles) | Dispersion `φ` |
-|---|---|---|---|---|
-| hand labels | 18 | 25% | 2.7% | 4.4 |
-| adamiak-v2 | 18 | 27% | 2.9% | 9.3 |
-| warmup-v1 | 18 | 36% | 3.8% | 4.4 |
-| nojitter-v1 | 8 | 33% | 4.0% | 5.1 |
-| nojitter-v1 @ 24 px | 4 | 37% | 5.4% | 1.2 |
+The AADT figure against the counter reading, on the 22 capture-directions that have both: within **8%** median and
+19% at the 90th percentile, biased −6% (AADT is 2024 and the readings are 2026).
 
-On the counter's own stretch (`calibrate.py`) the same sources find 43–55% of trucks with `φ` ≈ 1. On the
-longest road, with every nearby counter averaged, the share is lower and the pairs do not agree within counting
-noise (`φ` 4–9 except the 4-pair 24 px source). The two directions of one capture can differ by 2× (Blaine–
-Bellingham I-5: 19% NB, 40% SB). Likely causes, not yet checked: traffic changes along a 20–35 km road between
-interchanges, and counter speed bins and truck shares that are assumed (see Assumptions).
+| Source | Pairs (captures) | Detections ÷ real trucks | ÷ real count | `φ` trucks | weekday | weekend | from counter readings (pairs) |
+|---|---|---|---|---|---|---|---|
+| hand labels | 62 (31) | 43% | 4.9% | 12.2 | 53% | 25% | 25%, `φ` 4.4 (18) |
+| adamiak-v2 | 42 (21) | 35% | 4.1% | 10.1 | 46% | 22% | 27%, `φ` 9.3 (18) |
+| warmup-v1 | 42 (21) | 40% | 4.7% | 7.0 | 46% | 34% | 36%, `φ` 4.4 (18) |
+| nojitter-v1 | 46 (23) | 50% | 6.2% | 8.2 | 54% | 43% | 33%, `φ` 5.1 (8) |
+| nojitter-v1 @ 24 px | 38 (19) | 33% | 4.0% | 6.8 | 40% | 21% | 37%, `φ` 1.2 (4) |
+
+**Reading it.**
+- AADT relates every capture, not just the few before the counter data ends. But the pairs still do not agree
+  within counting noise (`φ` 7–12).
+- **Weekend captures come out lower** for every source, the hand labels included (weekday 40–54%, weekend
+  21–43%). `τ` is an annual truck share, and weekend traffic carries fewer trucks. A weekend truck share would
+  need class counts, which the counter data does not have.
+- **The same road on two weekdays can differ 3×.** Longview I-5 on 2026-07-14 is 68% NB and 77% SB; on
+  2026-08-05 it is 27% and 23%. Traffic varies, but not that much, so capture conditions (haze, sun angle,
+  view angle) are the next thing to check.
+- `calibrate.py`'s `φ` ≈ 1 (below) is partly a selection effect: it fits only pairs with at least 3 detections,
+  which drops the low ones.
 
 ### Terms (one direction of travel, one capture, one counter)
 
@@ -315,7 +327,7 @@ interchanges, and counter speed bins and truck shares that are assumed (see Assu
 | `Δt` | blue→green band time offset | s | fitted, step 2 |
 | `v̄` | space-mean speed, `s̄ / Δt` (or the counter's, when fitting) | km/h | |
 | `T` | residence time, `L / v̄` | min | |
-| `V₁₅` | counter volume in a 15-minute bin, this direction | veh / 15 min | `continuousSpeed15min.parquet` |
+| `V₁₅` | volume in a 15-minute bin, this direction: the counter's, or `AADT / 2 × s(bin, day)` | veh / 15 min | `continuousSpeed15min.parquet`; `segments.geojson` + counter profiles |
 | `τ` | truck share of the stretch (WSDOT 2024 annual, km-weighted) | — | `segments.geojson` |
 | `λ` | the counter's vehicle estimate for the scene, `V₁₅ × T / 15 min` | veh | step 3 |
 | `p` | share of vehicles (or `p_τ`: of trucks) the source detects — the first-pass conversion | — | fitted, step 5 |

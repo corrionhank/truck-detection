@@ -5,6 +5,16 @@ Running log of what changed and what we learned. Newest first. For the current d
 
 ---
 
+## 2026-10-13 — §B5: the 15-minute count from AADT
+
+- §B5 "Inputs as chosen": the 15-minute count now comes from the road's WSDOT AADT ÷ 2 × the share of a day's
+  traffic in the capture's bin (weekday or weekend, the median of 312 counter directions' profiles), because the
+  counter data ends 2026-05-27, before most of the imagery. Counter readings stay beside it as a check. Against the
+  22 capture-directions with a reading, the AADT figure is within 8% median.
+- Results: 230 pairs on 50 captures. nojitter-v1 finds 50% of real trucks. Dispersion is 7–12, weekend captures
+  come out lower, and the same road on two weekdays can differ 3×. `calibrate.py`'s dispersion ≈ 1 is partly
+  from fitting only pairs with ≥3 detections.
+
 ## 2026-10-12 — §B5: roads from TIGER, median speed
 
 - §B5 "Inputs as chosen" now describes corridor-counts' TIGER-based `density.py`: the longest road in the scene
